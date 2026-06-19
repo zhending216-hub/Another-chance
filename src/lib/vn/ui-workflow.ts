@@ -41,14 +41,14 @@ export const VN_ASSET_WORKFLOW_OPTIONS: Array<{
   {
     category: 'Tachi',
     label: '立绘',
-    description: '生成角色立绘；先进入资产清单和 AIVN package，不强行改写 graph 节点。',
-    graphBehavior: '资产入包',
+    description: '生成角色立绘；成功后自动挂到 Dialogue/Paragraph 节点 Actions 演出。',
+    graphBehavior: '自动编排节点',
   },
   {
     category: 'Illustration',
     label: '插画',
-    description: '生成事件插画；先进入资产清单和 AIVN package，不阻塞 text-only graph。',
-    graphBehavior: '资产入包',
+    description: '生成事件插画；成功后自动挂到 Dialogue/Paragraph 节点 Actions 演出。',
+    graphBehavior: '自动编排节点',
   },
 ];
 

@@ -41,7 +41,8 @@ describe('AIVN UI workflow contract', () => {
     expect(AIVN_ASSET_CATEGORIES).toEqual(['Background', 'Tachi', 'Illustration']);
     expect(VN_ASSET_WORKFLOW_OPTIONS.map(option => option.category)).toEqual(AIVN_ASSET_CATEGORIES);
     expect(VN_ASSET_WORKFLOW_OPTIONS.find(option => option.category === 'Background')?.graphBehavior).toContain('graph');
-    expect(VN_ASSET_WORKFLOW_OPTIONS.find(option => option.category === 'Tachi')?.graphBehavior).toContain('入包');
+    expect(VN_ASSET_WORKFLOW_OPTIONS.find(option => option.category === 'Tachi')?.graphBehavior).toContain('编排');
+    expect(VN_ASSET_WORKFLOW_OPTIONS.find(option => option.category === 'Illustration')?.graphBehavior).toContain('编排');
   });
 
   it('summarizes validation results for the UI', () => {

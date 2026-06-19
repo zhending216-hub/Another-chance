@@ -18,6 +18,10 @@ import {
 } from './asset-bridge';
 import type { VNGraphSaveData, VNGraphValidationResult } from './types';
 import { validateVNGraph } from './validator';
+import {
+  orchestrateVNGraphVisuals,
+  type VNVisualOrchestrationReport,
+} from './visual-orchestration';
 
 export type AIVNChapterAssetCategory = VNAssetCategory;
 
@@ -43,6 +47,7 @@ export interface AIVNChapterAssetPreviewSuccess {
   graph: VNGraphSaveData;
   graphChanged: boolean;
   validation: VNGraphValidationResult;
+  orchestration?: VNVisualOrchestrationReport;
   warning: string;
 }
 
@@ -147,12 +152,20 @@ export async function generateAIVNChapterAssetPreview(
   const graph = injectAssetIntoGraph(options.graph, options.category, scopedAssetId);
   const graphChanged = graph !== options.graph;
   const assetRecords = [...(options.existingAssets ?? []), asset];
-  const validation = validateVNGraph(graph, {
-    requireEndingTerminal: true,
+  const orchestration = orchestrateVNGraphVisuals({
+    graph,
+    assets: assetRecords,
     knownSpeakers: options.knownSpeakers ?? [],
-    assetWhitelist: generatedAssetWhitelist(assetRecords),
-    assetResolver: generatedAssetResolver(assetRecords),
+    requireEndingTerminal: true,
   });
+  const validation = orchestration.validation.valid
+    ? orchestration.validation
+    : validateVNGraph(graph, {
+      requireEndingTerminal: true,
+      knownSpeakers: options.knownSpeakers ?? [],
+      assetWhitelist: generatedAssetWhitelist(assetRecords),
+      assetResolver: generatedAssetResolver(assetRecords),
+    });
   if (!validation.valid) {
     return {
       success: false,
@@ -171,12 +184,15 @@ export async function generateAIVNChapterAssetPreview(
     category: options.category,
     asset,
     image,
-    graph,
-    graphChanged,
+    graph: orchestration.validation.valid ? orchestration.graph : graph,
+    graphChanged: graphChanged || orchestration.graphChanged,
     validation,
+    orchestration: orchestration.report,
     warning: graphChanged
       ? ''
-      : `${options.category} asset generated but graph placement was not changed; package export can still include the asset.`,
+      : orchestration.graphChanged
+        ? ''
+        : `${options.category} asset generated but graph placement was not changed; package export can still include the asset.`,
   };
 }
 
