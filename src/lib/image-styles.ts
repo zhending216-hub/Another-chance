@@ -11,6 +11,7 @@ export type ImageStyle =
   | 'fantasy-epic'
   | 'wuxia'
   | 'anime'
+  | 'gacha-portrait'
   | 'noir-thriller';
 
 export type ConcreteImageStyle = Exclude<ImageStyle, 'auto'>;
@@ -25,7 +26,8 @@ export const IMAGE_STYLES: { value: ImageStyle; label: string }[] = [
   { value: 'sci-fi-cinematic', label: '科幻电影' },
   { value: 'fantasy-epic', label: '玄幻史诗' },
   { value: 'wuxia', label: '武侠/仙侠' },
-  { value: 'anime', label: '动漫' },
+  { value: 'anime', label: '动漫（场景插画）' },
+  { value: 'gacha-portrait', label: '动漫（抽卡立绘）' },
   { value: 'noir-thriller', label: '悬疑黑色' },
 ];
 

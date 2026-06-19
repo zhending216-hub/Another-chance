@@ -73,7 +73,10 @@ export const STYLE_TEMPLATES: Record<ConcreteImageStyle, string> = {
     'Chinese wuxia / xianxia concept art, flowing robes mid-motion, martial arts pose, misty mountain backdrop, ethereal glow, cinematic wide shot, modern digital painting (not traditional ink)',
 
   'anime':
-    'high quality Japanese anime key visual, clean line art, vibrant cel-shading, expressive characters, dynamic composition, Makoto Shinkai lighting',
+    'masterpiece, best quality, highres, anime illustration, clean line art, cel shading, flat color, vibrant palette, expressive characters, dynamic composition, soft gradient background, anime key visual, detailed eyes',
+
+  'gacha-portrait':
+    'masterpiece, best quality, highres, 1girl/1boy, solo, official game art, gacha character illustration, cel shading, flat color, hard shadows, clean thick black outlines, detailed ornate clothing, expressive eyes, looking at viewer, centered composition, upper body or full body, dynamic standing pose, simple gradient background, soft rim light, detailed accessories, miHoYo / Arknights / TYPE-MOON style character splash art',
 
   'noir-thriller':
     'film noir cinematic style, high-contrast chiaroscuro lighting, cold desaturated palette, dramatic shadows, suspenseful mood, photorealistic',
@@ -92,7 +95,9 @@ export function autoPickStyle(
   if (/悬疑|推理|惊悚|恐怖|凶案|密室/.test(blob)) return 'noir-thriller';
   if (/武侠|仙侠|江湖|内力|剑仙|道法/.test(blob)) return 'wuxia';
   if (/玄幻|奇幻|魔幻|法师|巫师|精灵|巨龙|魔法/.test(blob)) return 'fantasy-epic';
-  if (/同人|动漫|轻小说|火影|海贼|死神|鬼灭|龙珠|漫画/.test(blob)) return 'anime';
+  // 同人/动漫/游戏类：抽卡立绘风格（gacha portrait），更贴合主流动漫互动游戏的视觉调性
+  if (/同人|动漫|二次元|轻小说|手游|抽卡|立绘|游戏|火影|海贼|死神|鬼灭|龙珠|原神|明日方舟|崩坏|Fate|碧蓝|fgo|genshin|arknights/i.test(blob)) return 'gacha-portrait';
+  if (/漫画|动漫场景|插画|anime scene/i.test(blob)) return 'anime';
   if (/历史|正史|古代|王朝|皇帝|将军|朝廷|宫廷|帝王/.test(blob)) return 'historical-realistic';
   if (/都市|现代|言情|职场|校园|办公室/.test(blob)) return 'modern-realistic';
   // 默认：没匹配到关键词时倾向于现代写实（更通用），不再默认套古风
@@ -547,19 +552,18 @@ export async function generateImagesForSegment(
         };
         parts.push(typeHint[scene.type] || 'A cinematic scene');
 
-        // 用 sceneStateEn 补充环境描述
+        // 用 sceneStateEn 补充环境描述（仅在非空时拼接，避免 "environment: ," 空字段）
         if (sceneStateEn && sceneStateEn.trim()) {
           parts.push(`environment: ${sceneStateEn.trim()}`);
         }
 
-        // 用 genre 补充题材
-        if (genre) {
+        // 用 genre 补充题材（仅在非空时拼接）
+        if (genre && genre.trim()) {
           parts.push(`genre: ${genre}`);
         }
 
-        // 用 storyDescription 补充故事背景
-        if (storyDescription) {
-          // 取前100字符的英文概要
+        // 用 storyDescription 补充故事背景（仅在非空时拼接）
+        if (storyDescription && storyDescription.trim()) {
           parts.push(`story context: ${storyDescription.slice(0, 100)}`);
         }
 

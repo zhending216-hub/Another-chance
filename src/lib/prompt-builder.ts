@@ -170,11 +170,32 @@ function buildMemoryReminderPrompt(
 /**
  * 从文本中启发式提取人名（2-4字中文人名），用于事实锚点冷启动。
  * 匹配规则：姓 + 1~2 个名，姓氏取自百家姓前120个常见姓。
+ *
+ * 改进：过滤掉常见的误提取模式（地名+形容词、拟声词、标题子串等）
  */
 function extractPersonNames(text: string): string[] {
   const surnames = '赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜戚谢邹喻柏窦章苏潘葛奚范彭郎鲁韦昌马苗凤花方俞任袁柳鲍史唐费廉岑薛雷贺倪汤滕殷罗毕郝邬安常乐于时傅卞齐康伍余元卜顾孟平黄和穆萧尹姚邵湛汪祁毛禹狄米贝明臧计伏成戴谈宋茅庞熊纪舒屈项祝董梁杜阮蓝闵席季麻强贾路娄危江童颜郭梅盛林刁钟徐邱骆高夏蔡田樊胡凌霍虞万支柯昝管卢莫经房裘缪干解应宗丁宣贲邓郁单杭洪包诸左石崔吉钮龚程嵇邢滑裴陆荣翁荀羊於惠甄曲家封芮羿储靳汲邴糜松井段富巫乌焦巴弓牧隗山谷车侯宓蓬全郗班仰秋仲伊宫宁仇栾暴甘钭厉戎祖武符刘景詹束龙叶幸司韶郜黎蓟薄印宿白怀蒲邰从鄂索咸籍赖卓蔺屠蒙池乔阴郁胥能苍双闻莘党翟谭贡劳逄姬申扶堵冉宰郦雍卻璩桑桂濮牛寿通边扈燕冀郏浦尚农温别庄晏柴瞿阎充慕连茹习宦艾鱼容向古易慎戈廖庾终暨居衡步都耿满弘匡国文寇广禄阙东欧殳沃利蔚越夔隆师巩厍聂晁勾敖融冷訾辛阚那简饶空曾母沙乜养鞠须丰巢关蒯相查后荆红游竺权逯盖益桓公';
   const surnameSet = new Set<string>();
   for (const ch of surnames) surnameSet.add(ch);
+
+  // 常见地名前缀（用于过滤地名+形容词的误提取）
+  const placeNamePrefixes = new Set([
+    '易水', '渭水', '汉水', '淮水', '长江', '黄河', '洛水', '汾水',
+    '咸阳', '长安', '洛阳', '蓟城', '邯郸', '大梁', '临淄', '郢都',
+    '函谷', '武关', '潼关', '雁门', '云中', '陇西', '北地', '上郡',
+  ]);
+
+  // 拟声词和形容词（用于过滤）
+  const onomatopoeiaAndAdjectives = new Set([
+    '萧萧', '瑟瑟', '凄凄', '茫茫', '苍苍', '悠悠', '浩浩', '荡荡',
+    '飘飘', '纷纷', '扬扬', '漫漫', '沉沉', '隐隐', '隆隆', '轰轰',
+  ]);
+
+  // 动词后缀（如果名字以这些结尾，很可能是动词短语而非人名）
+  const verbSuffixes = new Set([
+    '刺', '杀', '伐', '攻', '守', '战', '击', '破', '灭', '亡',
+    '走', '逃', '追', '赶', '来', '去', '入', '出', '上', '下',
+  ]);
 
   const names = new Set<string>();
   // 匹配 姓+名(1-2字) 且名不是常见虚词/动词
@@ -189,15 +210,44 @@ function extractPersonNames(text: string): string[] {
       const namePart = candidate.slice(1); // 名的部分
       if (!namePart) continue;
       // 名部分不能包含标点、空格、数字、非中文字符
-      if (/[^\u4e00-\u9fff]/.test(namePart)) continue;
+      if (/[^一-鿿]/.test(namePart)) continue;
       // 名部分每个字不能是虚词
       if ([...namePart].some(ch => nonNameChars.has(ch))) continue;
+
+      // === 过滤误提取 ===
+
+      // 1. 过滤以动词结尾的（如"荆轲刺"、"荆轲刺秦"）
+      if (verbSuffixes.has(candidate[candidate.length - 1])) {
+        continue;
+      }
+
+      // 2. 过滤地名+形容词的组合（如"易水萧"、"易水萧萧"）
+      let isPlaceNameCombo = false;
+      for (const place of placeNamePrefixes) {
+        if (candidate.startsWith(place)) {
+          isPlaceNameCombo = true;
+          break;
+        }
+      }
+      if (isPlaceNameCombo) continue;
+
+      // 3. 过滤拟声词和形容词（如"萧萧"）
+      if (onomatopoeiaAndAdjectives.has(candidate)) {
+        continue;
+      }
+
+      // 4. 过滤纯地名（如"易水"）
+      if (placeNamePrefixes.has(candidate)) {
+        continue;
+      }
+
       names.add(candidate);
     }
   }
 
   return [...names];
 }
+
 
 /**
  * 风格锚点：用第一段开头 200 字作为文体参照，比抽象指令有效
@@ -545,34 +595,41 @@ export async function buildFullPrompt(options: BuildPromptOptions): Promise<Buil
   // ─── 12.5 收集所有已知角色名（注册角色 + chain 文本中出现过的人名） ───
   const knownCharacterNames: string[] = [];
   const registeredCharacterNames: string[] = [];
-  // 已注册角色的名字（最可靠，用于纠错）
-  if (allCharIds.length > 0) {
-    try {
-      const chars = await characterManager.buildCharacterPrompt(allCharIds);
-      // buildCharacterPrompt 输出格式：## 名字（角色） → 提取 "##" 和 "（" 之间的名字
-      const nameMatches = chars.match(/##\s*(.+?)（/g);
-      if (nameMatches) {
-        for (const m of nameMatches) {
-          const name = m.replace(/##\s*/, '').replace(/（.*/, '').trim();
-          if (name) {
-            knownCharacterNames.push(name);
-            registeredCharacterNames.push(name);
-          }
+  const seenNames = new Set<string>();
+
+  // 优先从 Character 表直接查询（最可靠）
+  try {
+    const chars = await characterManager.list(storyId);
+    if (chars.length > 0) {
+      for (const c of chars) {
+        if (c.name && !seenNames.has(c.name)) {
+          seenNames.add(c.name);
+          knownCharacterNames.push(c.name);
+          registeredCharacterNames.push(c.name);
         }
       }
-    } catch {}
-  }
-  // 冷启动兜底：从 chain 文本中提取人名
-  if (knownCharacterNames.length === 0 && chain.length > 0) {
-    const chainText = chain.map(s => (s as any).content || '').filter(Boolean).join('');
-    const extracted = extractPersonNames(chainText);
-    knownCharacterNames.push(...extracted.slice(0, 8));
-  }
-  // 从 storyTitle / storyDescription 中也提取
-  if (knownCharacterNames.length === 0) {
-    const metaText = [storyTitle, storyDescription].filter(Boolean).join(' ');
-    const metaNames = extractPersonNames(metaText);
-    knownCharacterNames.push(...metaNames.slice(0, 5));
+    }
+  } catch {}
+
+  // 如果 Character 表有数据，直接使用
+  if (registeredCharacterNames.length > 0) {
+    console.log(`  已注册角色: ${registeredCharacterNames.join(', ')}`);
+  } else {
+    // 冷启动兜底：从 chain 文本中提取人名（使用更严格的启发式）
+    if (chain.length > 0) {
+      const chainText = chain.map(s => (s as any).content || '').filter(Boolean).join('');
+      // 使用改进的严格提取
+      const { extractPersonNamesStrict } = await import('./character-extractor');
+      const extracted = extractPersonNamesStrict(chainText);
+      knownCharacterNames.push(...extracted.slice(0, 8));
+    }
+    // 从 storyTitle / storyDescription 中也提取
+    if (knownCharacterNames.length === 0) {
+      const metaText = [storyTitle, storyDescription].filter(Boolean).join(' ');
+      const { extractPersonNamesStrict } = await import('./character-extractor');
+      const metaNames = extractPersonNamesStrict(metaText);
+      knownCharacterNames.push(...metaNames.slice(0, 5));
+    }
   }
 
   parts.push(buildMemoryReminderPrompt(isFiction, foreshadowingList, branchMode, knownCharacterNames));

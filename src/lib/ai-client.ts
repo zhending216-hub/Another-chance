@@ -362,18 +362,26 @@ export function buildOpenAIRequest(
     max_tokens: maxTokens || params.max_tokens
   };
 
-  // 启用智谱 GLM 内置 web_search 工具（BigModel /paas/v4 端点支持）
+  // 启用智谱 GLM 内置 web_search 工具（仅 BigModel /paas/v4 端点支持）
+  // 注意：OpenAI 及其他兼容 API 不支持 web_search 类型，需要跳过
   if (enableWebSearch) {
-    requestBody.tools = [
-      {
-        type: 'web_search',
-        web_search: {
-          enable: true,
-          search_engine: 'search_std',
-          search_result: true,
+    const modelName = (config.model || '').toLowerCase();
+    const baseUrl = (config.baseUrl || '').toLowerCase();
+    // 仅在智谱 GLM 模型且使用 BigModel 端点时启用 web_search
+    const isGLMModel = modelName.includes('glm');
+    const isBigModelEndpoint = baseUrl.includes('bigmodel') || baseUrl.includes('/paas/');
+    if (isGLMModel && isBigModelEndpoint) {
+      requestBody.tools = [
+        {
+          type: 'web_search',
+          web_search: {
+            enable: true,
+            search_engine: 'search_std',
+            search_result: true,
+          },
         },
-      },
-    ];
+      ];
+    }
   }
 
   return {

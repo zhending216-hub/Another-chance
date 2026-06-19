@@ -8,6 +8,8 @@ import TimelineBar from '@/components/TimelineBar';
 import DirectorSidebar from '@/components/DirectorSidebar';
 import PacingControls from '@/components/PacingControls';
 import StoryImageDisplay from '@/components/story/StoryImageDisplay';
+import AutoContinuePanel from '@/components/AutoContinuePanel';
+import PlausibilityPanel from '@/components/PlausibilityPanel';
 import { IMAGE_STYLES, type ImageStyle, type ConcreteImageStyle } from '@/lib/image-styles';
 import type { PacingConfig, Character, StorySegment, StoryBranch } from '@/types/story';
 import { getStaticBranchDirections } from '@/lib/genre-config';
@@ -75,6 +77,12 @@ export default function StoryDetailPage({ params }: { params: { id: string } }) 
   const [regeneratingImageForSeg, setRegeneratingImageForSeg] = useState<string | null>(null);
   const [imageStyle, setImageStyle] = useState<ImageStyle>('ink-wash');
   const [styleRecommendation, setStyleRecommendation] = useState<{style: string, reason: string} | null>(null);
+  // 自动续写
+  const [showAutoContinue, setShowAutoContinue] = useState(false);
+  // 合理性检测
+  const [showPlausibility, setShowPlausibility] = useState(false);
+  const [plausibilityReport, setPlausibilityReport] = useState<any>(null);
+  const [checkingPlausibility, setCheckingPlausibility] = useState(false);
 
   const isOwner = !!session?.user?.id && story?.ownerId === session.user.id;
 
@@ -240,6 +248,32 @@ export default function StoryDetailPage({ params }: { params: { id: string } }) 
       await loadTree();
       setNewContent('');
       setDisplayedLines([]);
+
+      // 续写完成后自动进行合理性检测
+      const latestSegments = await fetch(`/api/stories/${id}/segments?branchId=${currentBranchId}`).then(r => r.json());
+      const latestSegment = latestSegments.segments?.[latestSegments.segments.length - 1];
+      if (latestSegment) {
+        setCheckingPlausibility(true);
+        try {
+          const checkRes = await fetch(`/api/stories/${id}/plausibility`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ segmentId: latestSegment.id, branchId: currentBranchId }),
+          });
+          if (checkRes.ok) {
+            const checkData = await checkRes.json();
+            setPlausibilityReport(checkData.report);
+            // 如果有问题，自动展开面板
+            if (checkData.report?.issues?.length > 0) {
+              setShowPlausibility(true);
+            }
+          }
+        } catch (e) {
+          console.warn('合理性检测失败:', e);
+        } finally {
+          setCheckingPlausibility(false);
+        }
+      }
     } catch (e) {
       alert('续写失败: ' + (e instanceof Error ? e.message : '请重试'));
     } finally {
@@ -933,21 +967,99 @@ export default function StoryDetailPage({ params }: { params: { id: string } }) 
             {segments.length > 0 && (
               <div className="mt-6 text-center">
                 <div className="divider-ornament mb-6"><span>✦</span></div>
-                <button
-                  onClick={handleContinue}
-                  disabled={continuing}
-                  className={`inline-flex items-center gap-2 px-8 py-3 rounded-full font-medium transition-all ${
-                    continuing
-                      ? 'bg-gray-200 text-[var(--muted)] cursor-wait'
-                      : 'bg-gradient-to-r from-amber-700 to-red-800 text-white hover:shadow-lg hover:shadow-amber-900/20'
-                  }`}
-                >
-                  {continuing ? (
-                    <><span className="inline-block w-4 h-4 border-2 border-[var(--muted)] border-t-transparent rounded-full animate-spin" />故事书写中...</>
-                  ) : (
-                    <>✦ 续写故事</>
-                  )}
-                </button>
+                <div className="flex items-center justify-center gap-3 flex-wrap">
+                  <button
+                    onClick={handleContinue}
+                    disabled={continuing}
+                    className={`inline-flex items-center gap-2 px-8 py-3 rounded-full font-medium transition-all ${
+                      continuing
+                        ? 'bg-gray-200 text-[var(--muted)] cursor-wait'
+                        : 'bg-gradient-to-r from-amber-700 to-red-800 text-white hover:shadow-lg hover:shadow-amber-900/20'
+                    }`}
+                  >
+                    {continuing ? (
+                      <><span className="inline-block w-4 h-4 border-2 border-[var(--muted)] border-t-transparent rounded-full animate-spin" />故事书写中...</>
+                    ) : (
+                      <>✦ 续写故事</>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => setShowAutoContinue(true)}
+                    className="inline-flex items-center gap-2 px-6 py-3 rounded-full font-medium bg-gradient-to-r from-blue-600 to-indigo-700 text-white hover:shadow-lg hover:shadow-blue-900/20 transition-all"
+                  >
+                    🔄 自动续写
+                  </button>
+                </div>
+
+                {/* 合理性检测状态 */}
+                {checkingPlausibility && (
+                  <div className="mt-4 flex items-center justify-center gap-2 text-sm text-blue-600">
+                    <span className="inline-block w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                    正在检测内容合理性...
+                  </div>
+                )}
+
+                {/* 合理性检测结果 */}
+                {plausibilityReport && !checkingPlausibility && (
+                  <div className="mt-4 max-w-md mx-auto">
+                    <button
+                      onClick={() => setShowPlausibility(!showPlausibility)}
+                      className={`w-full p-3 rounded-lg border text-left transition-all ${
+                        plausibilityReport.overallScore >= 80
+                          ? 'border-green-200 bg-green-50 hover:bg-green-100'
+                          : plausibilityReport.overallScore >= 60
+                          ? 'border-yellow-200 bg-yellow-50 hover:bg-yellow-100'
+                          : 'border-red-200 bg-red-50 hover:bg-red-100'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="text-lg">
+                            {plausibilityReport.overallScore >= 80 ? '✅' : plausibilityReport.overallScore >= 60 ? '⚠️' : '❌'}
+                          </span>
+                          <span className="font-medium">
+                            合理性评分：{plausibilityReport.overallScore}/100
+                          </span>
+                        </div>
+                        {plausibilityReport.issues?.length > 0 && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-white/50">
+                            {plausibilityReport.issues.length} 个问题
+                          </span>
+                        )}
+                      </div>
+                      {plausibilityReport.summary && (
+                        <p className="text-xs text-gray-600 mt-1">{plausibilityReport.summary}</p>
+                      )}
+                    </button>
+
+                    {/* 展开的问题列表 */}
+                    {showPlausibility && plausibilityReport.issues?.length > 0 && (
+                      <div className="mt-2 p-3 bg-white rounded-lg border text-left text-sm space-y-2">
+                        {plausibilityReport.issues.map((issue: any, idx: number) => (
+                          <div key={idx} className={`p-2 rounded ${
+                            issue.severity === 'critical' ? 'bg-red-50 border border-red-200' :
+                            issue.severity === 'major' ? 'bg-orange-50 border border-orange-200' :
+                            issue.severity === 'minor' ? 'bg-yellow-50 border border-yellow-200' :
+                            'bg-blue-50 border border-blue-200'
+                          }`}>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-white/70 font-medium">
+                                {issue.severity === 'critical' ? '严重' :
+                                 issue.severity === 'major' ? '较大' :
+                                 issue.severity === 'minor' ? '较小' : '建议'}
+                              </span>
+                              <span className="font-medium">{issue.title}</span>
+                            </div>
+                            <p className="text-xs text-gray-600 mt-1">{issue.description}</p>
+                            {issue.suggestion && (
+                              <p className="text-xs text-blue-600 mt-1">💡 {issue.suggestion}</p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -969,6 +1081,23 @@ export default function StoryDetailPage({ params }: { params: { id: string } }) 
       </div>
 
       {showBranchDialog && branchDialog}
+
+      {/* 自动续写弹窗 */}
+      {showAutoContinue && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setShowAutoContinue(false)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+            <AutoContinuePanel
+              storyId={id}
+              branchId={currentBranchId}
+              onComplete={() => {
+                setShowAutoContinue(false);
+                loadBranchSegments(currentBranchId);
+                loadTree();
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* 评论区 */}
       <div className="max-w-3xl mx-auto px-6">

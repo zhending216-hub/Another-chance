@@ -7,6 +7,7 @@ import { buildFullPrompt } from '@/lib/prompt-builder';
 import { directorManager } from '@/lib/director-manager';
 import { timelineEngine } from '@/lib/timeline-engine';
 import { consistencyChecker } from '@/lib/consistency-checker';
+import { plausibilityChecker } from '@/lib/plausibility-checker';
 import { callAIText } from '@/lib/ai-client';
 import { classifyGenre } from '@/lib/genre-config';
 import { PacingEngine } from '@/lib/pacing-engine';
@@ -203,11 +204,35 @@ export async function POST(
       console.warn('[continue] 新内容矛盾检测失败:', e);
     }
 
+    // AI 合理性检测
+    let plausibilityReport: any = null;
+    try {
+      const existingContent = chain.map((s: StorySegment) => s.content).join('\n');
+      const characterNames = mentionedIds.length > 0
+        ? (await characterManager.list(storyId)).map(c => c.name)
+        : [];
+
+      plausibilityReport = await plausibilityChecker.check({
+        storyTitle: story.title,
+        storyDescription: story.description ?? undefined,
+        genre: story.genre ?? undefined,
+        existingContent,
+        newContent: aiResponse,
+        characterNames,
+        worldSettings: (story as any).worldSettings,
+      }, (p: string) => callAIText(p, { maxTokens: 1500, story: story as any }));
+
+      console.log(`[continue] 合理性检测: 分数 ${plausibilityReport.overallScore}, 问题数 ${plausibilityReport.issues.length}`);
+    } catch (e) {
+      console.warn('[continue] 合理性检测失败:', e);
+    }
+
     triggerBackup();
     return NextResponse.json({
       success: true,
       segment: newSegment,
       warnings: { consistency: consistencyWarnings, timeline: timelineWarnings },
+      plausibility: plausibilityReport,
     });
   } catch (error) {
     console.error('故事续写失败:', error);

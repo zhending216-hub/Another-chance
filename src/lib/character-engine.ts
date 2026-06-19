@@ -44,6 +44,15 @@ export class CharacterManager {
     const appearanceFromTraits = traitsArr.find((t: string) => typeof t === 'string' && t.startsWith('appearance:'))?.slice('appearance:'.length);
     const canonicalFromTraits = traitsArr.find((t: string) => typeof t === 'string' && t.startsWith('canonical:'))?.slice('canonical:'.length);
 
+    // 检查是否已存在同名角色（防止并发写入导致重复）
+    const existing = await prisma.character.findFirst({
+      where: { storyId: data.storyId, name: data.name },
+    });
+    if (existing) {
+      console.log(`[character-engine] 角色 "${data.name}" 已存在，跳过创建`);
+      return existing;
+    }
+
     return prisma.character.create({
       data: {
         id: genId(),
@@ -447,26 +456,26 @@ confidence < 0.6 时，isFandom 必须为 false。`;
     // Step 1: NER 抽取段落中的人物名
     let extractedNames: string[] = [];
     try {
-      const nerPrompt = `从下面这段中文文本中，抽取所有"人物角色名"（完整姓名、别名、小名、代号均可；不要地名、组织名）。
-已知列表（供参考，避免重复写已有名字）：${[...existingNameSet].slice(0, 30).join('、') || '（无）'}
+      // 使用改进的 AI 提取函数
+      const { extractCharactersWithAI } = await import('./character-extractor');
+      const extracted = await extractCharactersWithAI(
+        segmentContent,
+        callAIFn,
+        {
+          title: ctx?.storyDescription?.slice(0, 50),
+          description: ctx?.storyDescription,
+          existingNames: [...existingNameSet],
+        },
+      );
+      extractedNames = extracted
+        .filter(c => c.confidence >= 0.6)  // 只取高置信度的
+        .map(c => c.name);
 
-严格输出一个 JSON 字符串数组，不要 markdown，不要解释文字。
-示例：["李白","小明"]
-若没有任何人物，输出：[]
-
-文本：
-${segmentContent.slice(0, 2000)}`;
-
-      const raw = await callAIFn(nerPrompt);
-      const parsed = extractJsonFromAI<string[]>(raw);
-      if (Array.isArray(parsed)) {
-        extractedNames = parsed
-          .filter((n: any) => typeof n === 'string' && n.trim().length > 0 && n.length <= 30 && /[\u4e00-\u9fff]/.test(n))
-          .map((n: string) => n.trim());
-      }
+      console.log(`[character-engine] AI 提取角色: ${extractedNames.join(', ') || '(无)'}`);
     } catch (e) {
       console.warn('[character-engine] 人物名 NER 失败:', e);
     }
+
 
     // Step 2: 筛出新名字
     const newNames = extractedNames.filter(n => !existingNameSet.has(n));
