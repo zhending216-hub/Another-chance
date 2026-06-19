@@ -273,6 +273,26 @@ model GeneratedVNChapter {
   @@map("generated_vn_chapters")
 }
 
+model GeneratedAsset {
+  id            String   @id @default(cuid())
+  storyId       String
+  chapterId     String?
+  assetId       String
+  scopedAssetId String
+  category      String
+  publicUrl     String
+  localPath     String?
+  mimeType      String?
+  sha256        String?
+  prompt        String?  @db.Text
+  createdAt     DateTime @default(now())
+
+  @@index([storyId])
+  @@index([chapterId])
+  @@unique([storyId, scopedAssetId])
+  @@map("generated_assets")
+}
+
 // ========== 社交功能模型 ==========
 
 model StoryLike {
