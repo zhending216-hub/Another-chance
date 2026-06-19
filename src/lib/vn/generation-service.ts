@@ -1,8 +1,9 @@
 import type { Story } from '@/lib/prisma';
+import type { GenerationAssetGroup, GenerationContext } from '@/lib/generation/contracts';
 import type { VNGenerationContext } from './context-builder';
-import type { VNGraphSaveData, VNGraphValidationResult } from './types';
+import type { VNAssetResolver, VNAssetWhitelist, VNGraphSaveData, VNGraphValidationOptions, VNGraphValidationResult } from './types';
 import { parseAndValidateVNGraphJson } from './validator';
-import { buildVNGraphPrompt, buildVNSystemPrompt } from './prompt-builder';
+import { buildAIVNGraphPrompt, buildVNGraphPrompt, buildVNSystemPrompt } from './prompt-builder';
 import { buildVNGraphRepairPrompt } from './repair';
 
 export interface VNTextAIOptions {
@@ -16,6 +17,7 @@ export type VNTextAIFn = (prompt: string, options?: VNTextAIOptions) => Promise<
 
 export interface GenerateVNGraphPreviewOptions {
   context: VNGenerationContext;
+  aivnContext?: GenerationContext;
   callAIText: VNTextAIFn;
   storyForAI?: Story;
   maxRepairAttempts?: number;
@@ -38,7 +40,12 @@ export async function generateVNGraphPreview(
 ): Promise<VNGraphPreviewResult> {
   const maxRepairAttempts = Math.max(0, Math.min(options.maxRepairAttempts ?? 1, 2));
   const requireEndingTerminal = options.requireEndingTerminal ?? true;
-  const prompt = buildVNGraphPrompt(options.context, { requireEndingTerminal });
+  const prompt = options.aivnContext
+    ? buildAIVNGraphPrompt(options.aivnContext, { requireEndingTerminal })
+    : buildVNGraphPrompt(options.context, { requireEndingTerminal });
+  const validationOptions = buildValidationOptions(options.context, options.aivnContext, requireEndingTerminal);
+  const knownSpeakerIds = validationOptions.knownSpeakers ?? [];
+  const allowedAssetRefs = collectAllowedAssetRefs(options.aivnContext);
   const repairPrompts: string[] = [];
 
   let rawAIText = await options.callAIText(prompt, {
@@ -48,10 +55,7 @@ export async function generateVNGraphPreview(
     priority: 'high',
   });
 
-  let parsed = parseAndValidateVNGraphJson(rawAIText, {
-    knownSpeakers: options.context.knownSpeakers,
-    requireEndingTerminal,
-  });
+  let parsed = parseAndValidateVNGraphJson(rawAIText, validationOptions);
 
   let repairAttempts = 0;
   while (!parsed.valid && repairAttempts < maxRepairAttempts) {
@@ -59,6 +63,9 @@ export async function generateVNGraphPreview(
       originalPrompt: prompt,
       rawOutput: rawAIText,
       validationError: parsed.error,
+      knownSpeakerIds,
+      allowedAssetRefs,
+      requireEndingTerminal,
     });
     repairPrompts.push(repairPrompt);
     repairAttempts++;
@@ -68,10 +75,7 @@ export async function generateVNGraphPreview(
       story: options.storyForAI,
       priority: 'high',
     });
-    parsed = parseAndValidateVNGraphJson(rawAIText, {
-      knownSpeakers: options.context.knownSpeakers,
-      requireEndingTerminal,
-    });
+    parsed = parseAndValidateVNGraphJson(rawAIText, validationOptions);
   }
 
   return {
@@ -86,4 +90,61 @@ export async function generateVNGraphPreview(
     repairAttempts,
     ...(options.includeDebug ? { prompt, repairPrompts } : {}),
   };
+}
+
+function buildValidationOptions(
+  context: VNGenerationContext,
+  aivnContext: GenerationContext | undefined,
+  requireEndingTerminal: boolean,
+): VNGraphValidationOptions {
+  const options: VNGraphValidationOptions = {
+    knownSpeakers: aivnContext?.characters?.exactSpeakerIds ?? context.knownSpeakers,
+    requireEndingTerminal,
+  };
+
+  if (aivnContext?.assetWhitelist) {
+    options.assetWhitelist = generationAssetWhitelist(aivnContext);
+    options.assetResolver = generationAssetResolver(aivnContext);
+  }
+
+  return options;
+}
+
+function generationAssetWhitelist(context: GenerationContext): VNAssetWhitelist {
+  return {
+    contains(category: string, scopedAssetId: string) {
+      const group = assetGroupForCategory(category);
+      if (!group) return false;
+      return (context.assetWhitelist?.assetsByGroup[group] ?? []).includes(scopedAssetId);
+    },
+  };
+}
+
+function generationAssetResolver(context: GenerationContext): VNAssetResolver {
+  const allowed = new Set(collectAllowedAssetRefs(context));
+  return {
+    resolve(scopedAssetId: string) {
+      return allowed.has(scopedAssetId) ? 'memory://aivn-generation-asset' : false;
+    },
+  };
+}
+
+function collectAllowedAssetRefs(context: GenerationContext | undefined): string[] {
+  if (!context?.assetWhitelist) return [];
+  const refs = new Set<string>();
+  for (const assets of Object.values(context.assetWhitelist.assetsByGroup)) {
+    for (const asset of assets ?? []) refs.add(asset);
+  }
+  return [...refs].sort();
+}
+
+function assetGroupForCategory(category: string): GenerationAssetGroup | null {
+  const value = category.trim().toLowerCase();
+  if (value === 'background') return 'background';
+  if (value === 'tachi') return 'tachi';
+  if (value === 'illustration') return 'illustration';
+  if (value === 'voice') return 'voice';
+  if (value === 'bgm') return 'bgm';
+  if (value === 'soundeffect' || value === 'sound_effect') return 'soundeffect';
+  return null;
 }
