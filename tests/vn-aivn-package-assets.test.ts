@@ -37,12 +37,21 @@ describe('AIVN package export with generated assets', () => {
     }
   });
 
-  it('exports a background asset package that resolves used_assets and Objects bytes', async () => {
+  it('exports visual action assets that resolve used_assets and Objects bytes', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'gushi-aivn-assets-'));
     cleanupPaths.push(tempDir);
     const imagePath = join(tempDir, 'bg.demo.room.png');
-    await writeFile(imagePath, PNG_BYTES);
-    const imageHash = createHash('sha256').update(PNG_BYTES).digest('hex');
+    const tachiPath = join(tempDir, 'char.hero.png');
+    const illustrationPath = join(tempDir, 'cg.reveal.png');
+    const bgBytes = Buffer.concat([PNG_BYTES, Buffer.from([1])]);
+    const tachiBytes = Buffer.concat([PNG_BYTES, Buffer.from([2])]);
+    const illustrationBytes = Buffer.concat([PNG_BYTES, Buffer.from([3])]);
+    await writeFile(imagePath, bgBytes);
+    await writeFile(tachiPath, tachiBytes);
+    await writeFile(illustrationPath, illustrationBytes);
+    const imageHash = createHash('sha256').update(bgBytes).digest('hex');
+    const tachiHash = createHash('sha256').update(tachiBytes).digest('hex');
+    const illustrationHash = createHash('sha256').update(illustrationBytes).digest('hex');
 
     prismaMock.story.findUnique.mockResolvedValue({
       id: 'story-assets',
@@ -57,7 +66,7 @@ describe('AIVN package export with generated assets', () => {
       storyId: 'story-assets',
       branchId: 'main',
       sourceSegmentId: 'seg-1',
-      graphJson: graphWithBackground(),
+      graphJson: graphWithVisualActions(),
       status: 'valid',
       migrationRunId: 'run-assets',
       migrationKind: 'aivn-fused-generation-v1',
@@ -74,8 +83,28 @@ describe('AIVN package export with generated assets', () => {
       sha256: imageHash,
       prompt: 'rainy room',
       createdAt: new Date('2026-06-19T00:00:00.000Z'),
+    }, {
+      assetId: 'char.hero',
+      scopedAssetId: 'assets:char.hero',
+      category: 'Tachi',
+      publicUrl: '/generated-images/char.hero.png',
+      localPath: tachiPath,
+      mimeType: 'image/png',
+      sha256: tachiHash,
+      prompt: 'hero portrait',
+      createdAt: new Date('2026-06-19T00:00:01.000Z'),
+    }, {
+      assetId: 'cg.reveal',
+      scopedAssetId: 'assets:cg.reveal',
+      category: 'Illustration',
+      publicUrl: '/generated-images/cg.reveal.png',
+      localPath: illustrationPath,
+      mimeType: 'image/png',
+      sha256: illustrationHash,
+      prompt: 'reveal CG',
+      createdAt: new Date('2026-06-19T00:00:02.000Z'),
     }]);
-    prismaMock.character.findMany.mockResolvedValue([]);
+    prismaMock.character.findMany.mockResolvedValue([{ name: 'hero' }]);
 
     const pkg = await buildAIVNInstallablePackage({
       storyId: 'story-assets',
@@ -90,26 +119,44 @@ describe('AIVN package export with generated assets', () => {
     const importReport = pkg.files['import-report.json'] as any;
 
     expect(bookManifest.entry_story).toBe(pkg.chapterAssetId);
-    expect(bookManifest.used_assets).toEqual(['assets:bg.demo.room']);
+    expect(bookManifest.used_assets).toEqual(['assets:bg.demo.room', 'assets:cg.reveal', 'assets:char.hero']);
     expect(assetsManifest.assets['bg.demo.room']).toMatchObject({
       type: 'image',
       category: 'background',
       ext: '.png',
       hash: `sha256-${imageHash}`,
     });
+    expect(assetsManifest.assets['char.hero']).toMatchObject({
+      type: 'image',
+      category: 'tachi',
+      ext: '.png',
+      hash: `sha256-${tachiHash}`,
+    });
+    expect(assetsManifest.assets['cg.reveal']).toMatchObject({
+      type: 'image',
+      category: 'illustration',
+      ext: '.png',
+      hash: `sha256-${illustrationHash}`,
+    });
     expect(validationReport.valid).toBe(true);
-    expect(importReport.copied_asset_count).toBe(1);
+    expect(importReport.copied_asset_count).toBe(3);
     expect(importReport.skipped_asset_count).toBe(0);
 
     const objectPath = join(pkg.folderPath!, 'Objects', `sha256_${imageHash}.png`);
+    const tachiObjectPath = join(pkg.folderPath!, 'Objects', `sha256_${tachiHash}.png`);
+    const illustrationObjectPath = join(pkg.folderPath!, 'Objects', `sha256_${illustrationHash}.png`);
     expect(existsSync(objectPath)).toBe(true);
-    expect(await readFile(objectPath)).toEqual(PNG_BYTES);
+    expect(existsSync(tachiObjectPath)).toBe(true);
+    expect(existsSync(illustrationObjectPath)).toBe(true);
+    expect(await readFile(objectPath)).toEqual(bgBytes);
+    expect(await readFile(tachiObjectPath)).toEqual(tachiBytes);
+    expect(await readFile(illustrationObjectPath)).toEqual(illustrationBytes);
     expect(existsSync(join(pkg.folderPath!, 'assets_manifest.json'))).toBe(true);
     expect(existsSync(join(pkg.folderPath!, 'Books', pkg.packageId, 'manifest.json'))).toBe(true);
   });
 });
 
-function graphWithBackground(): VNGraphSaveData {
+function graphWithVisualActions(): VNGraphSaveData {
   return {
     Version: 1,
     StartNodeIndex: 1,
@@ -130,13 +177,72 @@ function graphWithBackground(): VNGraphSaveData {
       DisplayName: '',
       Comment: '',
       NodeType: 1,
-      SubType: 11,
+      SubType: 1,
       X: 320,
+      Y: 0,
+      Data: {
+        SpeakerIdData: { Kind: 'String', StringValue: 'hero' },
+        TextData: { Kind: 'String', StringValue: 'The reveal changed everything.' },
+        VoiceIdData: { Kind: 'String', StringValue: '' },
+      },
+      Outputs: { Actions: [4], Next: [3] },
+    }, {
+      Index: 3,
+      DisplayName: '',
+      Comment: '',
+      NodeType: 1,
+      SubType: 11,
+      X: 640,
       Y: 0,
       Data: {
         EndingId: { Kind: 'String', StringValue: '' },
         Title: { Kind: 'String', StringValue: '' },
         Subtitle: { Kind: 'String', StringValue: '' },
+      },
+      Outputs: {},
+    }, {
+      Index: 4,
+      DisplayName: '',
+      Comment: '',
+      NodeType: 2,
+      SubType: 7,
+      X: 320,
+      Y: 180,
+      Data: {},
+      Outputs: { Actions: [5, 6] },
+    }, {
+      Index: 5,
+      DisplayName: '',
+      Comment: '',
+      NodeType: 2,
+      SubType: 1,
+      X: 80,
+      Y: 180,
+      Data: {
+        TachiID: { Kind: 'String', StringValue: 'hero' },
+        TachiIamge: { Kind: 'String', StringValue: 'assets:char.hero' },
+        TargetPosition: { Kind: 'Vector2', X: 520, Y: 780 },
+        EnterType: { Kind: 'Enum', StringValue: 'FadeIn' },
+        Duration: { Kind: 'Float', NumberValue: 0.25 },
+      },
+      Outputs: {},
+    }, {
+      Index: 6,
+      DisplayName: '',
+      Comment: '',
+      NodeType: 2,
+      SubType: 6,
+      X: 80,
+      Y: 280,
+      Data: {
+        IllustrationImage: { Kind: 'String', StringValue: 'assets:cg.reveal' },
+        ChangeType: { Kind: 'Enum', StringValue: 'FadeIn' },
+        Duration: { Kind: 'Float', NumberValue: 0.45 },
+        PerformanceType: { Kind: 'Enum', StringValue: 'None' },
+        FocusPoint: { Kind: 'Vector2', X: 0.5, Y: 0.5 },
+        FocusScale: { Kind: 'Float', NumberValue: 1.4 },
+        FocusHoldDuration: { Kind: 'Float', NumberValue: 0.1 },
+        HideDialogueDuringPerformance: { Kind: 'Bool', BoolValue: false },
       },
       Outputs: {},
     }],
