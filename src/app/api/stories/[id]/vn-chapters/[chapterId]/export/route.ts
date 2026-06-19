@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { getUserIdFromRequest } from '@/lib/auth-helpers';
 import { canViewStory } from '@/lib/permissions';
+import { buildAIVNInstallablePackage } from '@/lib/vn/aivn-package';
 import { buildVNExportPackage } from '@/lib/vn/export-package';
 
 export async function GET(
@@ -16,7 +17,41 @@ export async function GET(
       return NextResponse.json({ error: '无权查看' }, { status: 403 });
     }
 
-    const format = request.nextUrl.searchParams.get('format') === 'folder' ? 'folder' : 'zip';
+    const requestedFormat = request.nextUrl.searchParams.get('format');
+    if (requestedFormat === 'aivn-folder' || requestedFormat === 'aivn-zip') {
+      const format = requestedFormat === 'aivn-folder' ? 'folder' : 'zip';
+      const exported = await buildAIVNInstallablePackage({
+        storyId: params.id,
+        chapterId: params.chapterId,
+        format,
+      });
+
+      if (format === 'folder') {
+        return NextResponse.json({
+          success: true,
+          format: requestedFormat,
+          folderPath: exported.folderPath,
+          packageId: exported.packageId,
+          chapterAssetId: exported.chapterAssetId,
+          manifest: exported.files[`Books/${exported.packageId}/manifest.json`],
+          assetsManifest: exported.files['assets_manifest.json'],
+          importReport: exported.files['import-report.json'],
+          validation: exported.files['validation-report.json'],
+        });
+      }
+
+      const filename = `aivn-installable-${params.chapterId}.zip`;
+      return new NextResponse(exported.zipBuffer ? new Uint8Array(exported.zipBuffer) : null, {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/zip',
+          'Content-Disposition': `attachment; filename="${filename}"`,
+          'Cache-Control': 'no-store',
+        },
+      });
+    }
+
+    const format = requestedFormat === 'folder' ? 'folder' : 'zip';
     const exported = await buildVNExportPackage({
       storyId: params.id,
       chapterId: params.chapterId,
