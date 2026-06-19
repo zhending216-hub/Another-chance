@@ -7,11 +7,11 @@ const Progress = 1;
 const Action = 2;
 
 describe('AIVN visual orchestration', () => {
-  it('adds Tachi and Illustration actions to each Dialogue and Paragraph node', () => {
+  it('places speaker-aware Tachi and selective Illustration actions with clear state', () => {
     const result = orchestrateVNGraphVisuals({
       graph: graphFixture(),
       assets: visualAssets(),
-      knownSpeakers: ['hero'],
+      knownSpeakers: ['hero', 'rival'],
     });
 
     expect(result.validation.valid, result.validation.error).toBe(true);
@@ -20,31 +20,35 @@ describe('AIVN visual orchestration', () => {
     expect(result.report.insertedNodeCount).toBeGreaterThan(0);
 
     const dialogue = result.graph.Nodes.find(node => node.Index === 2)!;
-    const paragraph = result.graph.Nodes.find(node => node.Index === 3)!;
-    expect(dialogue.Outputs.Actions.length).toBeGreaterThanOrEqual(2);
-    expect(paragraph.Outputs.Actions.length).toBeGreaterThanOrEqual(2);
+    const rivalDialogue = result.graph.Nodes.find(node => node.Index === 3)!;
+    expect(dialogue.Outputs.Actions.length).toBeGreaterThanOrEqual(1);
+    expect(rivalDialogue.Outputs.Actions.length).toBeGreaterThanOrEqual(1);
 
     const tachiNodes = result.graph.Nodes.filter(node => Number(node.NodeType) === Action && node.SubType === 1);
     const artNodes = result.graph.Nodes.filter(node => Number(node.NodeType) === Action && node.SubType === 6);
     const sequenceNodes = result.graph.Nodes.filter(node => Number(node.NodeType) === Action && node.SubType === 7);
+    const clearTachiNodes = result.graph.Nodes.filter(node => Number(node.NodeType) === Action && node.SubType === 33);
 
     expect(tachiNodes).toHaveLength(2);
-    expect(artNodes).toHaveLength(2);
-    expect(sequenceNodes.length).toBeGreaterThanOrEqual(4);
+    expect(artNodes).toHaveLength(1);
+    expect(sequenceNodes.length).toBeGreaterThanOrEqual(3);
+    expect(clearTachiNodes.length).toBeGreaterThanOrEqual(1);
     expect(tachiNodes[0].Data.TachiIamge).toEqual(stringValue('assets:char.hero'));
+    expect(tachiNodes[1].Data.TachiIamge).toEqual(stringValue('assets:char.rival'));
     expect(artNodes[0].Data.IllustrationImage).toEqual(stringValue('assets:cg.reveal'));
+    expect(result.report.placedAssets.every(item => item.placementReason && item.confidence)).toBe(true);
   });
 
   it('is idempotent for the same assets on the same target nodes', () => {
     const first = orchestrateVNGraphVisuals({
       graph: graphFixture(),
       assets: visualAssets(),
-      knownSpeakers: ['hero'],
+      knownSpeakers: ['hero', 'rival'],
     });
     const second = orchestrateVNGraphVisuals({
       graph: first.graph,
       assets: visualAssets(),
-      knownSpeakers: ['hero'],
+      knownSpeakers: ['hero', 'rival'],
     });
 
     expect(second.validation.valid, second.validation.error).toBe(true);
@@ -72,7 +76,7 @@ describe('AIVN visual orchestration', () => {
     expect(result.validation.valid, result.validation.error).toBe(true);
     expect(result.graphChanged).toBe(false);
     expect(result.graph.Nodes).toHaveLength(2);
-    expect(result.report.skippedAssets.map(item => item.reason)).toContain('no Dialogue or Paragraph nodes can host Actions');
+    expect(result.report.skippedAssets.map(item => item.reason)).toContain('no Dialogue or Paragraph nodes can host visual actions');
   });
 });
 
@@ -83,6 +87,12 @@ function visualAssets(): VNGeneratedAssetRecord[] {
     category: 'Tachi',
     publicUrl: '/generated-images/hero.png',
     localPath: '/tmp/hero.png',
+  }, {
+    assetId: 'char.rival',
+    scopedAssetId: 'assets:char.rival',
+    category: 'Tachi',
+    publicUrl: '/generated-images/rival.png',
+    localPath: '/tmp/rival.png',
   }, {
     assetId: 'cg.reveal',
     scopedAssetId: 'assets:cg.reveal',
@@ -99,8 +109,9 @@ function graphFixture(): VNGraphSaveData {
     Nodes: [
       startNode(1, [2]),
       dialogueNode(2, [3]),
-      paragraphNode(3, [4]),
-      endNode(4),
+      rivalDialogueNode(3, [4]),
+      paragraphNode(4, [5]),
+      endNode(5),
     ],
   };
 }
@@ -131,6 +142,24 @@ function dialogueNode(index: number, next: number[]): VNNodeSaveData {
     Data: {
       SpeakerIdData: stringValue('hero'),
       TextData: stringValue('We made it before sunset.'),
+      VoiceIdData: stringValue(''),
+    },
+    Outputs: { Actions: [], Next: next },
+  };
+}
+
+function rivalDialogueNode(index: number, next: number[]): VNNodeSaveData {
+  return {
+    Index: index,
+    DisplayName: '',
+    Comment: '',
+    NodeType: Progress,
+    SubType: 1,
+    X: 520,
+    Y: 120,
+    Data: {
+      SpeakerIdData: stringValue('rival'),
+      TextData: stringValue('I found the secret door first.'),
       VoiceIdData: stringValue(''),
     },
     Outputs: { Actions: [], Next: next },

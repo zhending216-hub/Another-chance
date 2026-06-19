@@ -10,6 +10,11 @@ import type {
   VNSerializedValue,
 } from './types';
 import { validateVNGraph } from './validator';
+import {
+  buildVNVisualPlacementPlan,
+  type VNVisualClearActionKind,
+  type VNVisualPlacementPlanItem,
+} from './visual-placement-policy';
 
 export interface VNVisualOrchestrationOptions {
   graph: VNGraphSaveData;
@@ -28,6 +33,9 @@ export interface VNVisualOrchestrationReport {
     category: string;
     targetNodeIndex: number;
     actionNodeIndexes: number[];
+    placementReason?: string;
+    confidence?: number;
+    clearBefore?: VNVisualClearActionKind[];
   }>;
   skippedAssets: Array<{
     scopedAssetId: string;
@@ -50,6 +58,8 @@ const PARAGRAPH_SUBTYPE = 2;
 const ACTION_SEQUENCE_SUBTYPE = 7;
 const ACTION_ART_SUBTYPE = 6;
 const ACTION_TACHI_SUBTYPE = 1;
+const ACTION_CLEAR_ALL_TACHIS_SUBTYPE = 33;
+const ACTION_CLEAR_ILLUSTRATION_SUBTYPE = 37;
 
 export function orchestrateVNGraphVisuals(
   options: VNVisualOrchestrationOptions,
@@ -70,16 +80,15 @@ export function orchestrateVNGraphVisuals(
     return { graph: next, graphChanged: false, report, validation };
   }
 
-  const targets = stageableProgressNodes(next)
-    .slice(0, Math.max(1, options.maxTargetProgressNodes ?? Number.MAX_SAFE_INTEGER));
-  if (targets.length === 0) {
-    for (const asset of visualAssets) {
-      report.skippedAssets.push({
-        scopedAssetId: asset.scopedAssetId,
-        category: asset.category,
-        reason: 'no Dialogue or Paragraph nodes can host Actions',
-      });
-    }
+  const placementPlan = buildVNVisualPlacementPlan({
+    graph: next,
+    assets: visualAssets,
+    knownSpeakers: options.knownSpeakers ?? [],
+    maxTargetProgressNodes: options.maxTargetProgressNodes,
+  });
+  report.skippedAssets.push(...placementPlan.skippedAssets);
+
+  if (placementPlan.placements.length === 0) {
     const validation = validateOrchestratedGraph(next, options);
     return { graph: next, graphChanged: false, report, validation };
   }
@@ -87,54 +96,59 @@ export function orchestrateVNGraphVisuals(
   let nextIndex = maxNodeIndex(next) + 1;
   const nodesByIndex = () => new Map(next.Nodes.map(node => [node.Index, node]));
 
-  targets.forEach((target, targetOrdinal) => {
-    const insertedForTarget: number[] = [];
+  for (const placement of placementPlan.placements) {
     const index = nodesByIndex();
-
-    for (const asset of visualAssets) {
-      if (targetActionTreeHasAsset(target, index, asset.scopedAssetId)) {
-        report.skippedAssets.push({
-          scopedAssetId: asset.scopedAssetId,
-          category: asset.category,
-          reason: `target node #${target.Index} already references this asset`,
-        });
-        continue;
-      }
-
-      const actionNodes = buildActionNodesForAsset(asset, target, targetOrdinal, nextIndex);
-      if (actionNodes.length === 0) {
-        report.skippedAssets.push({
-          scopedAssetId: asset.scopedAssetId,
-          category: asset.category,
-          reason: 'asset category is not visually orchestrated',
-        });
-        continue;
-      }
-
-      nextIndex += actionNodes.length;
-      const sequence = createSequenceNode({
-        index: nextIndex++,
-        target,
-        childIndexes: actionNodes.map(node => node.Index),
+    const target = index.get(placement.targetNodeIndex);
+    if (!target) {
+      report.skippedAssets.push({
+        scopedAssetId: placement.asset.scopedAssetId,
+        category: placement.asset.category,
+        reason: `planned target node #${placement.targetNodeIndex} is missing`,
       });
-      next.Nodes.push(sequence, ...actionNodes);
-      ensureActionsOutput(target).push(sequence.Index);
-
-      const inserted = [sequence.Index, ...actionNodes.map(node => node.Index)];
-      insertedForTarget.push(...inserted);
-      report.placedAssets.push({
-        scopedAssetId: asset.scopedAssetId,
-        category: asset.category,
-        targetNodeIndex: target.Index,
-        actionNodeIndexes: inserted,
-      });
+      continue;
     }
 
-    if (insertedForTarget.length > 0) {
-      report.targetNodeIndexes.push(target.Index);
-      report.insertedNodeCount += insertedForTarget.length;
+    if (targetActionTreeHasAsset(target, index, placement.asset.scopedAssetId)) {
+      report.skippedAssets.push({
+        scopedAssetId: placement.asset.scopedAssetId,
+        category: placement.asset.category,
+        reason: `target node #${target.Index} already references this asset`,
+      });
+      continue;
     }
-  });
+
+    const actionNodes = buildActionNodesForPlacement(placement, target, nextIndex);
+    if (actionNodes.length === 0) {
+      report.skippedAssets.push({
+        scopedAssetId: placement.asset.scopedAssetId,
+        category: placement.asset.category,
+        reason: 'asset category is not visually orchestrated',
+      });
+      continue;
+    }
+
+    nextIndex += actionNodes.length;
+    const sequence = createSequenceNode({
+      index: nextIndex++,
+      target,
+      childIndexes: actionNodes.map(node => node.Index),
+    });
+    next.Nodes.push(sequence, ...actionNodes);
+    ensureActionsOutput(target).push(sequence.Index);
+
+    const inserted = [sequence.Index, ...actionNodes.map(node => node.Index)];
+    if (!report.targetNodeIndexes.includes(target.Index)) report.targetNodeIndexes.push(target.Index);
+    report.insertedNodeCount += inserted.length;
+    report.placedAssets.push({
+      scopedAssetId: placement.asset.scopedAssetId,
+      category: placement.asset.category,
+      targetNodeIndex: target.Index,
+      actionNodeIndexes: inserted,
+      placementReason: placement.placementReason,
+      confidence: placement.confidence,
+      clearBefore: placement.clearBefore,
+    });
+  }
 
   report.changed = report.insertedNodeCount > 0;
   const validation = validateOrchestratedGraph(next, options);
@@ -164,6 +178,24 @@ export function orchestrateVNGraphVisuals(
     report,
     validation,
   };
+}
+
+function buildActionNodesForPlacement(
+  placement: VNVisualPlacementPlanItem,
+  target: VNNodeSaveData,
+  startIndex: number,
+): VNNodeSaveData[] {
+  const nodes: VNNodeSaveData[] = [];
+  let nextIndex = startIndex;
+  for (const clear of placement.clearBefore) {
+    nodes.push(createClearNode({
+      index: nextIndex++,
+      target,
+      clear,
+    }));
+  }
+  nodes.push(...buildActionNodesForAsset(placement.asset, target, placement.targetNodeIndex, nextIndex));
+  return nodes;
 }
 
 function buildActionNodesForAsset(
@@ -261,6 +293,41 @@ function createArtNode(options: {
       FocusHoldDuration: floatValue(0.1),
       HideDialogueDuringPerformance: boolValue(false),
     },
+    Outputs: {},
+  };
+}
+
+function createClearNode(options: {
+  index: number;
+  target: VNNodeSaveData;
+  clear: VNVisualClearActionKind;
+}): VNNodeSaveData {
+  if (options.clear === 'ClearIllustration') {
+    return {
+      Index: options.index,
+      DisplayName: 'AIVN clear illustration',
+      Comment: `AIVN_VISUAL_ORCHESTRATION:v1 clear=Illustration target=${options.target.Index}`,
+      NodeType: ACTION_NODE_TYPE,
+      SubType: ACTION_CLEAR_ILLUSTRATION_SUBTYPE,
+      X: options.target.X - 780,
+      Y: options.target.Y + 260,
+      Data: {
+        ClearType: enumValue('FadeOut'),
+        Duration: floatValue(0.25),
+      },
+      Outputs: {},
+    };
+  }
+
+  return {
+    Index: options.index,
+    DisplayName: 'AIVN clear tachis',
+    Comment: `AIVN_VISUAL_ORCHESTRATION:v1 clear=Tachis target=${options.target.Index}`,
+    NodeType: ACTION_NODE_TYPE,
+    SubType: ACTION_CLEAR_ALL_TACHIS_SUBTYPE,
+    X: options.target.X - 780,
+    Y: options.target.Y + 160,
+    Data: {},
     Outputs: {},
   };
 }
