@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { callAIText } from '@/lib/ai-client';
 import { getUserIdFromRequest } from '@/lib/auth-helpers';
-import { canEditStory } from '@/lib/permissions';
+import { canEditStory, canViewStory } from '@/lib/permissions';
 import type { ImageStyle } from '@/lib/image-generator';
 import { generateAIVNChapterAssetPreview, type AIVNChapterAssetCategory } from '@/lib/vn/asset-generation-service';
 import type { VNGeneratedAssetRecord } from '@/lib/vn/asset-bridge';
@@ -11,6 +11,56 @@ import type { VNGraphSaveData } from '@/lib/vn/types';
 interface GenerateAssetBody {
   category?: AIVNChapterAssetCategory;
   style?: ImageStyle;
+}
+
+const AIVN_ASSET_CATEGORIES = ['Background', 'Tachi', 'Illustration'] as const;
+
+export async function GET(
+  request: NextRequest,
+  { params }: { params: { id: string; chapterId: string } },
+) {
+  try {
+    const userId = await getUserIdFromRequest(request);
+    const story = await prisma.story.findUnique({ where: { id: params.id } });
+    if (!story) return NextResponse.json({ error: '故事不存在' }, { status: 404 });
+    if (!canViewStory(story, userId ?? undefined)) {
+      return NextResponse.json({ error: '无权查看' }, { status: 403 });
+    }
+
+    const chapter = await prisma.generatedVNChapter.findFirst({
+      where: { id: params.chapterId, storyId: params.id },
+      select: { id: true },
+    });
+    if (!chapter) return NextResponse.json({ error: 'VN chapter 不存在' }, { status: 404 });
+
+    const assets = await prisma.generatedAsset.findMany({
+      where: { storyId: params.id, chapterId: params.chapterId },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        storyId: true,
+        chapterId: true,
+        assetId: true,
+        scopedAssetId: true,
+        category: true,
+        publicUrl: true,
+        localPath: true,
+        mimeType: true,
+        sha256: true,
+        prompt: true,
+        createdAt: true,
+      },
+    });
+
+    return NextResponse.json({ success: true, assets });
+  } catch (error) {
+    console.error('[vn-assets] list failed:', error);
+    return NextResponse.json({
+      success: false,
+      error: '获取 VN assets 失败',
+      details: error instanceof Error ? error.message : String(error),
+    }, { status: 500 });
+  }
 }
 
 export async function POST(
@@ -23,7 +73,7 @@ export async function POST(
 
     const body = await request.json().catch(() => ({})) as GenerateAssetBody;
     const category = body.category || 'Background';
-    if (!['Background', 'Tachi', 'Illustration'].includes(category)) {
+    if (!AIVN_ASSET_CATEGORIES.includes(category as AIVNChapterAssetCategory)) {
       return NextResponse.json({ error: '不支持的 VN 资产类型' }, { status: 400 });
     }
 
