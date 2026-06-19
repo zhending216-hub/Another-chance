@@ -97,9 +97,10 @@ function collectFromUnknown(value: unknown, result: Set<string>) {
 }
 
 function slugify(value: string): string {
-  return value
+  const slug = value
     .toLowerCase()
-    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, '.')
+    .replace(/[^a-z0-9]+/g, '.')
     .replace(/^\.+|\.+$/g, '')
-    .slice(0, 32) || 'item';
+    .slice(0, 32);
+  return slug || 'item';
 }

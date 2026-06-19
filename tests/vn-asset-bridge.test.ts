@@ -20,6 +20,17 @@ describe('VN asset bridge', () => {
     expect(ids.scopedAssetId).toBe(`assets:${ids.assetId}`);
   });
 
+  it('keeps generated asset ids compatible with local AIVN ascii rules', () => {
+    const ids = buildAIVNAssetIds({
+      storyTitle: '雨夜旧门',
+      chapterId: '章节一',
+      category: 'Illustration',
+    });
+
+    expect(ids.assetId).toMatch(/^cg\.[a-z0-9._-]+$/);
+    expect(ids.scopedAssetId).toBe(`assets:${ids.assetId}`);
+  });
+
   it('injects a background asset into the Start node', () => {
     const graph = graphFixture();
     const next = injectBackgroundAsset(graph, 'assets:bg.demo.room');

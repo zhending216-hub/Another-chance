@@ -1,24 +1,15 @@
-import { createHash } from 'crypto';
-import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { callAIText } from '@/lib/ai-client';
 import { getUserIdFromRequest } from '@/lib/auth-helpers';
 import { canEditStory } from '@/lib/permissions';
-import { generateImagesForSegment, type ImageStyle } from '@/lib/image-generator';
-import {
-  buildAIVNAssetIds,
-  generatedAssetResolver,
-  generatedAssetWhitelist,
-  injectBackgroundAsset,
-  type VNGeneratedAssetRecord,
-} from '@/lib/vn/asset-bridge';
+import type { ImageStyle } from '@/lib/image-generator';
+import { generateAIVNChapterAssetPreview, type AIVNChapterAssetCategory } from '@/lib/vn/asset-generation-service';
+import type { VNGeneratedAssetRecord } from '@/lib/vn/asset-bridge';
 import type { VNGraphSaveData } from '@/lib/vn/types';
-import { validateVNGraph } from '@/lib/vn/validator';
 
 interface GenerateAssetBody {
-  category?: 'Background';
+  category?: AIVNChapterAssetCategory;
   style?: ImageStyle;
 }
 
@@ -32,8 +23,8 @@ export async function POST(
 
     const body = await request.json().catch(() => ({})) as GenerateAssetBody;
     const category = body.category || 'Background';
-    if (category !== 'Background') {
-      return NextResponse.json({ error: '首版 VN asset bridge 只支持 Background' }, { status: 400 });
+    if (!['Background', 'Tachi', 'Illustration'].includes(category)) {
+      return NextResponse.json({ error: '不支持的 VN 资产类型' }, { status: 400 });
     }
 
     const story = await prisma.story.findUnique({ where: { id: params.id } });
@@ -54,40 +45,6 @@ export async function POST(
       : null;
     const segmentContent = sourceSegment?.content || story.description || story.title;
 
-    const images = await generateImagesForSegment({
-      segmentId: `vn_${chapter.id}`,
-      segmentContent,
-      style: body.style || 'auto',
-      maxImages: 1,
-      genre: story.genre ?? undefined,
-      storyDescription: story.description ?? undefined,
-      callAIFn: (prompt: string) => callAIText(prompt, { maxTokens: 4000, story: story as any, priority: 'low' }),
-    });
-
-    if (images.length === 0) {
-      return NextResponse.json({
-        success: false,
-        warning: '图片生成未返回结果，VNGraph 保持 text-only。',
-        chapterId: chapter.id,
-      });
-    }
-
-    const image = images[0];
-    const { assetId, scopedAssetId } = buildAIVNAssetIds({
-      storyTitle: story.title,
-      chapterId: chapter.id,
-      category: 'Background',
-      index: 0,
-    });
-    const localPath = publicUrlToLocalPath(image.url);
-    const newAsset: VNGeneratedAssetRecord = {
-      assetId,
-      scopedAssetId,
-      category: 'Background',
-      publicUrl: image.url,
-      localPath,
-    };
-
     const existingAssets = await prisma.generatedAsset.findMany({
       where: { storyId: story.id, chapterId: chapter.id },
     });
@@ -95,69 +52,82 @@ export async function POST(
       where: { storyId: story.id },
       select: { name: true },
     });
-    const assetRecords: VNGeneratedAssetRecord[] = [
-      ...existingAssets.map(asset => ({
-        assetId: asset.assetId,
-        scopedAssetId: asset.scopedAssetId,
-        category: asset.category,
-        publicUrl: asset.publicUrl,
-        localPath: asset.localPath,
-      })),
-      newAsset,
-    ];
+    const assetRecords: VNGeneratedAssetRecord[] = existingAssets.map(asset => ({
+      assetId: asset.assetId,
+      scopedAssetId: asset.scopedAssetId,
+      category: asset.category,
+      publicUrl: asset.publicUrl,
+      localPath: asset.localPath,
+    }));
 
-    const graphWithBackground = injectBackgroundAsset(chapter.graphJson as unknown as VNGraphSaveData, scopedAssetId);
-    const validation = validateVNGraph(graphWithBackground, {
-      requireEndingTerminal: true,
+    const preview = await generateAIVNChapterAssetPreview({
+      storyTitle: story.title,
+      chapterId: chapter.id,
+      graph: chapter.graphJson as unknown as VNGraphSaveData,
+      category,
+      segmentId: `vn_${chapter.id}`,
+      segmentContent,
+      style: body.style || 'auto',
+      genre: story.genre ?? undefined,
+      storyDescription: story.description ?? undefined,
+      callAIFn: (prompt: string) => callAIText(prompt, { maxTokens: 4000, story: story as any, priority: 'low' }),
+      existingAssets: assetRecords,
       knownSpeakers: characters.map(character => character.name).filter(Boolean),
-      assetWhitelist: generatedAssetWhitelist(assetRecords),
-      assetResolver: generatedAssetResolver(assetRecords),
     });
-    if (!validation.valid) {
+
+    if (!preview.success) {
       return NextResponse.json({
         success: false,
-        error: validation.error,
-        warning: '图片已生成但未写入 VNGraph；请检查资产引用规则。',
-        publicUrl: image.url,
-      }, { status: 422 });
+        error: preview.error,
+        warning: preview.warning,
+        chapterId: chapter.id,
+        category,
+        image: preview.image,
+        validation: preview.validation,
+      });
     }
 
     const asset = await prisma.$transaction(async tx => {
       const saved = await tx.generatedAsset.upsert({
-        where: { storyId_scopedAssetId: { storyId: story.id, scopedAssetId } },
+        where: { storyId_scopedAssetId: { storyId: story.id, scopedAssetId: preview.asset.scopedAssetId } },
         create: {
           storyId: story.id,
           chapterId: chapter.id,
-          assetId,
-          scopedAssetId,
-          category: 'Background',
-          publicUrl: image.url,
-          localPath,
-          mimeType: guessMimeType(image.url),
-          sha256: localPath ? hashFileIfExists(localPath) : null,
-          prompt: image.prompt,
+          assetId: preview.asset.assetId,
+          scopedAssetId: preview.asset.scopedAssetId,
+          category: preview.asset.category,
+          publicUrl: preview.asset.publicUrl,
+          localPath: preview.asset.localPath,
+          mimeType: preview.asset.mimeType,
+          sha256: preview.asset.sha256,
+          prompt: preview.asset.prompt,
         },
         update: {
           chapterId: chapter.id,
-          publicUrl: image.url,
-          localPath,
-          mimeType: guessMimeType(image.url),
-          sha256: localPath ? hashFileIfExists(localPath) : null,
-          prompt: image.prompt,
+          category: preview.asset.category,
+          publicUrl: preview.asset.publicUrl,
+          localPath: preview.asset.localPath,
+          mimeType: preview.asset.mimeType,
+          sha256: preview.asset.sha256,
+          prompt: preview.asset.prompt,
         },
       });
-      await tx.generatedVNChapter.update({
-        where: { id: chapter.id },
-        data: { graphJson: graphWithBackground as any },
-      });
+      if (preview.graphChanged) {
+        await tx.generatedVNChapter.update({
+          where: { id: chapter.id },
+          data: { graphJson: preview.graph as any },
+        });
+      }
       return saved;
     });
 
     return NextResponse.json({
       success: true,
       asset,
-      graph: graphWithBackground,
-      validation,
+      graph: preview.graph,
+      graphChanged: preview.graphChanged,
+      warning: preview.warning,
+      validation: preview.validation,
     });
   } catch (error) {
     console.error('[vn-assets] generate failed:', error);
@@ -167,21 +137,4 @@ export async function POST(
       details: error instanceof Error ? error.message : String(error),
     }, { status: 500 });
   }
-}
-
-function publicUrlToLocalPath(publicUrl: string): string | null {
-  if (!publicUrl.startsWith('/')) return null;
-  return join(process.cwd(), 'public', publicUrl.replace(/^\/+/, ''));
-}
-
-function hashFileIfExists(path: string): string | null {
-  if (!existsSync(path)) return null;
-  return createHash('sha256').update(readFileSync(path)).digest('hex');
-}
-
-function guessMimeType(publicUrl: string): string | null {
-  if (/\.png($|\?)/i.test(publicUrl)) return 'image/png';
-  if (/\.jpe?g($|\?)/i.test(publicUrl)) return 'image/jpeg';
-  if (/\.webp($|\?)/i.test(publicUrl)) return 'image/webp';
-  return null;
 }
