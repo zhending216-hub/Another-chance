@@ -10,6 +10,7 @@ import PacingControls from '@/components/PacingControls';
 import StoryImageDisplay from '@/components/story/StoryImageDisplay';
 import AutoContinuePanel from '@/components/AutoContinuePanel';
 import PlausibilityPanel from '@/components/PlausibilityPanel';
+import VNChapterPanel from '@/components/VNChapterPanel';
 import { IMAGE_STYLES, type ImageStyle, type ConcreteImageStyle } from '@/lib/image-styles';
 import type { PacingConfig, Character, StorySegment, StoryBranch } from '@/types/story';
 import { getStaticBranchDirections } from '@/lib/genre-config';
@@ -83,6 +84,8 @@ export default function StoryDetailPage({ params }: { params: { id: string } }) 
   const [showPlausibility, setShowPlausibility] = useState(false);
   const [plausibilityReport, setPlausibilityReport] = useState<any>(null);
   const [checkingPlausibility, setCheckingPlausibility] = useState(false);
+  // AIVN VN chapter workflow
+  const [showVNPanel, setShowVNPanel] = useState(false);
 
   const isOwner = !!session?.user?.id && story?.ownerId === session.user.id;
 
@@ -989,6 +992,12 @@ export default function StoryDetailPage({ params }: { params: { id: string } }) 
                   >
                     🔄 自动续写
                   </button>
+                  <button
+                    onClick={() => setShowVNPanel(true)}
+                    className="inline-flex items-center gap-2 px-6 py-3 rounded-full font-medium bg-gradient-to-r from-emerald-700 to-teal-800 text-white hover:shadow-lg hover:shadow-emerald-900/20 transition-all"
+                  >
+                    VN 章节
+                  </button>
                 </div>
 
                 {/* 合理性检测状态 */}
@@ -1100,6 +1109,13 @@ export default function StoryDetailPage({ params }: { params: { id: string } }) 
       )}
 
       {/* 评论区 */}
+      <VNChapterPanel
+        storyId={id}
+        branchId={currentBranchId}
+        isOpen={showVNPanel}
+        onClose={() => setShowVNPanel(false)}
+      />
+
       <div className="max-w-3xl mx-auto px-6">
         <CommentSection storyId={id} branchId={currentBranchId !== 'main' ? currentBranchId : undefined} />
       </div>
