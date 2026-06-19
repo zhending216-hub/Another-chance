@@ -259,6 +259,13 @@ function auditStory(
 
   if (record.segments.length === 0) skipReasons.push('zero_segments');
   if (existingMigrationChapterCount > 0) skipReasons.push('existing_migration_chapter');
+  if (anomalies.orphanBranches > 0) skipReasons.push('orphan_branch_source');
+  if (anomalies.crossStoryBranches > 0) skipReasons.push('cross_story_branch_source');
+  if (anomalies.missingParentSegments > 0) skipReasons.push('missing_parent_segment');
+  if (anomalies.crossStoryParentSegments > 0) skipReasons.push('cross_story_parent_segment');
+  if (anomalies.crossStoryBranchSegments > 0) skipReasons.push('cross_story_branch_segment');
+  if (anomalies.branchSourcesOutsideMainline > 0) skipReasons.push('nested_branch_source_requires_chapter_handoff');
+  if (estimatedNodeCount > riskLimits.highNodeLimit) skipReasons.push('graph_too_large_requires_chapter_split');
 
   addCountWarning(warnings, anomalies.orphanBranches, 'orphan_branches');
   addCountWarning(warnings, anomalies.crossStoryBranches, 'cross_story_branches');
@@ -285,10 +292,10 @@ function auditStory(
   }
 
   let status: BulkAuditStoryReport['status'] = 'eligible';
-  if (record.segments.length === 0) {
-    status = 'skipped';
-  } else if (existingMigrationChapterCount > 0) {
+  if (existingMigrationChapterCount > 0) {
     status = 'duplicate';
+  } else if (skipReasons.length > 0) {
+    status = 'skipped';
   }
 
   return {

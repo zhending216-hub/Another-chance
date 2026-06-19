@@ -50,8 +50,8 @@ describe('bulk VN migration audit', () => {
 
     expect(report.mode).toBe('audit');
     expect(report.summary.storyCount).toBe(6);
-    expect(report.summary.eligibleCount).toBe(4);
-    expect(report.summary.skippedCount).toBe(1);
+    expect(report.summary.eligibleCount).toBe(2);
+    expect(report.summary.skippedCount).toBe(3);
     expect(report.summary.duplicateCount).toBe(1);
     expect(report.summary.anomalies.zeroSegmentStories).toBe(1);
     expect(report.summary.anomalies.orphanBranchSegments).toBe(1);
@@ -63,6 +63,8 @@ describe('bulk VN migration audit', () => {
     expect(report.stories.find(story => story.storyId === 'story-empty')?.skipReasons).toContain('zero_segments');
     expect(report.stories.find(story => story.storyId === 'story-duplicate')?.status).toBe('duplicate');
     expect(report.stories.find(story => story.storyId === 'story-orphan-segment')?.risk).toBe('medium');
+    expect(report.stories.find(story => story.storyId === 'story-nested-branch')?.status).toBe('skipped');
+    expect(report.stories.find(story => story.storyId === 'story-nested-branch')?.skipReasons).toContain('nested_branch_source_requires_chapter_handoff');
     expect(report.stories.find(story => story.storyId === 'story-cross-parent')?.risk).toBe('high');
     expect(report.stories.find(story => story.storyId === 'story-nested-branch')?.risk).toBe('high');
   });
@@ -106,18 +108,19 @@ describe('bulk VN migration dry-run', () => {
     expect(report.stories.every(story => typeof story.nodeCount === 'number' && story.nodeCount > 0)).toBe(true);
   });
 
-  it('records invalid graphs without persisting anything', () => {
+  it('skips unsupported complex graph shapes without persisting anything', () => {
     const report = buildBulkMigrationDryRunReport(corpusFixture([
-      storyRecord('story-invalid', [
-        segment('seg-invalid-branch', 'story-invalid', 'branch-1', 'missing-source', 'Unreachable branch segment.'),
-      ], [branch('branch-1', 'story-invalid', 'missing-source')]),
+      storyRecord('story-complex', [
+        segment('seg-complex-branch', 'story-complex', 'branch-1', 'missing-source', 'Unreachable branch segment.'),
+      ], [branch('branch-1', 'story-complex', 'missing-source')]),
     ]));
 
     expect(report.summary.validCount).toBe(0);
-    expect(report.summary.invalidCount).toBe(1);
-    expect(report.stories[0].status).toBe('invalid');
-    expect(report.stories[0].valid).toBe(false);
-    expect(report.stories[0].validationErrors.join('\n')).toContain('unreachable');
+    expect(report.summary.invalidCount).toBe(0);
+    expect(report.summary.skippedCount).toBe(1);
+    expect(report.stories[0].status).toBe('skipped');
+    expect(report.stories[0].valid).toBeNull();
+    expect(report.stories[0].validationErrors).toContain('orphan_branch_source');
     expect('persistedChapterId' in report.stories[0]).toBe(false);
   });
 
