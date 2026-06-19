@@ -253,6 +253,26 @@ model KeyEvent {
   @@map("key_events")
 }
 
+model GeneratedVNChapter {
+  id              String   @id @default(cuid())
+  storyId         String
+  branchId        String
+  sourceSegmentId String?
+  graphJson       Json?
+  rawAIText       String?  @db.Text
+  status          String   @default("valid")
+  validationError String?
+  repairAttempts  Int      @default(0)
+  createdById     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([storyId, branchId])
+  @@index([sourceSegmentId])
+  @@index([status])
+  @@map("generated_vn_chapters")
+}
+
 // ========== 社交功能模型 ==========
 
 model StoryLike {

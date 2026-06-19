@@ -5,6 +5,7 @@ import { canViewStory } from '@/lib/permissions';
 import { callAIText } from '@/lib/ai-client';
 import { buildVNGenerationContext } from '@/lib/vn/context-builder';
 import { generateVNGraphPreview } from '@/lib/vn/generation-service';
+import { saveVNChapter } from '@/lib/vn/storage';
 
 interface VNContinueRequestBody {
   branchId?: string;
@@ -12,6 +13,7 @@ interface VNContinueRequestBody {
   maxRepairAttempts?: number;
   requireEndingTerminal?: boolean;
   includeDebug?: boolean;
+  persist?: boolean;
 }
 
 export async function POST(
@@ -64,8 +66,19 @@ export async function POST(
       includeDebug: !!body.includeDebug,
     });
 
+    const chapter = body.persist
+      ? await saveVNChapter({
+        storyId,
+        branchId,
+        sourceSegmentId: context.sourceSegmentId,
+        createdById: userId,
+        result,
+      })
+      : null;
+
     return NextResponse.json({
       success: result.success,
+      chapter,
       graph: result.graph,
       validation: result.validation,
       rawAIText: body.includeDebug ? result.rawAIText : undefined,
