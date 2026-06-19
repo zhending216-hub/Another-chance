@@ -55,5 +55,8 @@ public/generated-images/*
 # Database backups
 /backups/
 
+# Generated AIVN export packages
+/exports/
+
 # Prisma config (incompatible with current Prisma version)
 prisma.config.ts
