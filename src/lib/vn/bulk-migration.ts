@@ -1,6 +1,16 @@
 import prisma from '@/lib/prisma';
 import type { Story, StoryBranch, StorySegment } from '@/lib/prisma';
 import { convertStoryTreeToVNGraph } from './tree-migration';
+import {
+  completeVNMigrationRun,
+  computeStorySourceHash,
+  failVNMigrationRun,
+  findVNMigrationRollbackTargets,
+  rollbackVNMigrationRun,
+  startVNMigrationRun,
+  STORY_TREE_MIGRATION_KIND,
+} from './migration-run';
+import { revalidateStoredVNChapter } from './storage';
 import { validateVNGraph } from './validator';
 import {
   BULK_MIGRATION_CONVERTER_VERSION,
@@ -11,6 +21,9 @@ import {
   type BulkMigrationAnomalyCounts,
   type BulkMigrationRiskCounts,
   type BulkMigrationSummary,
+  type BulkPersistReport,
+  type BulkPersistStoryReport,
+  type BulkRollbackReport,
   type BulkStoryAnomalyCounts,
   type BulkStoryRisk,
   emptyAnomalyCounts,
@@ -33,6 +46,9 @@ export interface GeneratedVNChapterSummary {
   storyId: string;
   branchId: string;
   status: string;
+  migrationRunId: string | null;
+  migrationKind: string | null;
+  sourceHash: string | null;
   createdAt: Date;
 }
 
@@ -54,6 +70,16 @@ export interface BulkMigrationBuildOptions {
   riskLimits?: BulkMigrationRiskLimits;
 }
 
+export interface BulkMigrationPersistOptions extends BulkMigrationBuildOptions {
+  risk?: BulkStoryRisk | 'all';
+  batchSize?: number;
+  reportPath?: string | null;
+}
+
+export interface BulkMigrationRollbackOptions extends BulkMigrationBuildOptions {
+  migrationRunId: string;
+}
+
 interface CorpusIndexes {
   segmentsById: Map<string, StorySegment>;
   branchesById: Map<string, StoryBranch>;
@@ -70,6 +96,9 @@ export async function loadBulkMigrationCorpus(): Promise<BulkMigrationCorpus> {
         storyId: true,
         branchId: true,
         status: true,
+        migrationRunId: true,
+        migrationKind: true,
+        sourceHash: true,
         createdAt: true,
       },
       orderBy: { createdAt: 'asc' },
@@ -99,6 +128,33 @@ export async function runBulkMigrationAudit(options: BulkMigrationBuildOptions =
 
 export async function runBulkMigrationDryRun(options: BulkMigrationBuildOptions = {}): Promise<BulkDryRunReport> {
   return buildBulkMigrationDryRunReport(await loadBulkMigrationCorpus(), options);
+}
+
+export async function runBulkMigrationPersist(
+  options: BulkMigrationPersistOptions = {},
+): Promise<BulkPersistReport> {
+  const corpus = await loadBulkMigrationCorpus();
+  return persistBulkMigrationCorpus(corpus, options);
+}
+
+export async function runBulkMigrationRollback(
+  options: BulkMigrationRollbackOptions,
+): Promise<BulkRollbackReport> {
+  const targets = await findVNMigrationRollbackTargets(options.migrationRunId);
+  const result = await rollbackVNMigrationRun(options.migrationRunId);
+  return {
+    mode: 'rollback',
+    generatedAt: options.generatedAt ?? new Date().toISOString(),
+    converterVersion: BULK_MIGRATION_CONVERTER_VERSION,
+    migrationRunId: options.migrationRunId,
+    summary: {
+      targetChapterCount: targets.chapters.length,
+      targetAssetCount: targets.assets.length,
+      deletedChapterCount: result.deletedChapterCount,
+      deletedAssetCount: result.deletedAssetCount,
+    },
+    targets,
+  };
 }
 
 export function buildBulkMigrationAuditReport(
@@ -327,7 +383,7 @@ function assessRisk(
 
 function buildSummary(
   corpus: BulkMigrationCorpus,
-  stories: Array<BulkAuditStoryReport | BulkDryRunStoryReport>,
+  stories: Array<BulkAuditStoryReport | BulkDryRunStoryReport | BulkPersistStoryReport>,
 ): BulkMigrationSummary {
   const anomalies = stories.reduce<BulkMigrationAnomalyCounts>((accumulator, story) => {
     accumulator.orphanBranches += story.anomalies.orphanBranches;
@@ -358,6 +414,7 @@ function buildSummary(
     duplicateCount: stories.filter(story => story.status === 'duplicate').length,
     validCount: stories.filter(story => story.status === 'valid').length,
     invalidCount: stories.filter(story => story.status === 'invalid').length,
+    persistedCount: stories.filter(story => story.status === 'persisted').length,
     riskCounts,
     anomalies,
   };
@@ -396,4 +453,164 @@ function groupBy<T>(items: T[], keySelector: (item: T) => string): Map<string, T
     grouped.set(key, list);
   }
   return grouped;
+}
+
+export function selectPersistCandidates(
+  dryRunReport: BulkDryRunReport,
+  options: Pick<BulkMigrationPersistOptions, 'risk' | 'batchSize'> = {},
+): BulkDryRunStoryReport[] {
+  const risk = options.risk ?? 'low';
+  const batchSize = options.batchSize ?? 5;
+  return dryRunReport.stories
+    .filter(story => story.status === 'valid')
+    .filter(story => risk === 'all' || story.risk === risk)
+    .slice(0, batchSize);
+}
+
+async function persistBulkMigrationCorpus(
+  corpus: BulkMigrationCorpus,
+  options: BulkMigrationPersistOptions,
+): Promise<BulkPersistReport> {
+  const generatedAt = options.generatedAt ?? new Date().toISOString();
+  const dryRun = buildBulkMigrationDryRunReport(corpus, { generatedAt, riskLimits: options.riskLimits });
+  const candidates = selectPersistCandidates(dryRun, options);
+  const recordsByStoryId = new Map(corpus.stories.map(record => [record.story.id, record]));
+  const run = await startVNMigrationRun({
+    mode: `persist:${options.risk ?? 'low'}`,
+    dryRun: false,
+    storyCount: candidates.length,
+    segmentCount: candidates.reduce((sum, story) => sum + story.segmentCount, 0),
+    branchCount: candidates.reduce((sum, story) => sum + story.branchCount, 0),
+    reportPath: options.reportPath ?? null,
+  });
+
+  const stories: BulkPersistStoryReport[] = [];
+  let validCount = 0;
+  let invalidCount = 0;
+  let skippedCount = 0;
+
+  try {
+    for (const candidate of candidates) {
+      const record = recordsByStoryId.get(candidate.storyId);
+      if (!record) {
+        invalidCount += 1;
+        stories.push({
+          ...candidate,
+          status: 'invalid',
+          dryRunValid: false,
+          sourceHash: null,
+          persistedChapterId: null,
+          revalidated: false,
+          validationErrors: ['story_record_missing'],
+          error: 'Story record missing from persist corpus.',
+        });
+        continue;
+      }
+
+      const sourceHash = computeStorySourceHash(record);
+      const existing = await prisma.generatedVNChapter.findFirst({
+        where: {
+          storyId: record.story.id,
+          migrationKind: STORY_TREE_MIGRATION_KIND,
+          sourceHash,
+        },
+        select: { id: true },
+      });
+      if (existing) {
+        skippedCount += 1;
+        stories.push({
+          ...candidate,
+          status: 'skipped',
+          dryRunValid: true,
+          sourceHash,
+          persistedChapterId: existing.id,
+          revalidated: false,
+          validationErrors: ['duplicate_source_hash'],
+          skipReasons: [...candidate.skipReasons, 'duplicate_source_hash'],
+        });
+        continue;
+      }
+
+      const result = convertStoryTreeToVNGraph({
+        story: record.story,
+        segments: record.segments,
+        branches: record.branches,
+      });
+      if (!result.validation.valid) {
+        invalidCount += 1;
+        stories.push({
+          ...candidate,
+          status: 'invalid',
+          dryRunValid: false,
+          sourceHash,
+          nodeCount: result.graph.Nodes.length,
+          persistedChapterId: null,
+          revalidated: false,
+          validationErrors: result.validation.errors.length > 0 ? result.validation.errors : [result.validation.error],
+        });
+        continue;
+      }
+
+      const chapter = await prisma.generatedVNChapter.create({
+        data: {
+          storyId: record.story.id,
+          branchId: 'migration-bulk',
+          sourceSegmentId: record.story.rootSegmentId,
+          graphJson: result.graph as any,
+          rawAIText: null,
+          status: 'valid',
+          validationError: null,
+          repairAttempts: 0,
+          createdById: record.story.ownerId,
+          migrationRunId: run.id,
+          migrationKind: STORY_TREE_MIGRATION_KIND,
+          sourceHash,
+        },
+      });
+      const stored = await prisma.generatedVNChapter.findUnique({ where: { id: chapter.id } });
+      const revalidation = revalidateStoredVNChapter(stored?.graphJson, { requireEndingTerminal: true });
+      if (revalidation.valid) {
+        validCount += 1;
+      } else {
+        invalidCount += 1;
+      }
+      stories.push({
+        ...candidate,
+        status: revalidation.valid ? 'persisted' : 'invalid',
+        dryRunValid: true,
+        sourceHash,
+        nodeCount: result.graph.Nodes.length,
+        persistedChapterId: chapter.id,
+        revalidated: revalidation.valid,
+        validationErrors: revalidation.valid
+          ? []
+          : revalidation.errors.length > 0 ? revalidation.errors : [revalidation.error],
+      });
+    }
+
+    await completeVNMigrationRun(run.id, {
+      validCount,
+      invalidCount,
+      skippedCount,
+      reportPath: options.reportPath ?? null,
+    });
+  } catch (error) {
+    await failVNMigrationRun(run.id, {
+      validCount,
+      invalidCount,
+      skippedCount,
+      reportPath: options.reportPath ?? null,
+      errorSummary: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+
+  return {
+    mode: 'persist',
+    generatedAt,
+    converterVersion: BULK_MIGRATION_CONVERTER_VERSION,
+    migrationRunId: run.id,
+    summary: buildSummary(corpus, stories),
+    stories,
+  };
 }

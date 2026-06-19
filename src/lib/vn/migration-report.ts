@@ -3,10 +3,11 @@ import { mkdir, writeFile } from 'fs/promises';
 
 export const BULK_MIGRATION_CONVERTER_VERSION = 'story-tree-v1';
 
-export type BulkMigrationMode = 'audit' | 'dry-run';
+export type BulkMigrationMode = 'audit' | 'dry-run' | 'persist';
 export type BulkStoryRisk = 'low' | 'medium' | 'high';
 export type BulkAuditStoryStatus = 'eligible' | 'skipped' | 'duplicate';
 export type BulkDryRunStoryStatus = 'valid' | 'invalid' | 'skipped' | 'duplicate';
+export type BulkPersistStoryStatus = 'persisted' | 'invalid' | 'skipped';
 
 export interface BulkMigrationAnomalyCounts {
   zeroSegmentStories: number;
@@ -37,6 +38,7 @@ export interface BulkMigrationSummary {
   duplicateCount: number;
   validCount: number;
   invalidCount: number;
+  persistedCount: number;
   riskCounts: BulkMigrationRiskCounts;
   anomalies: BulkMigrationAnomalyCounts;
 }
@@ -77,6 +79,17 @@ export interface BulkDryRunStoryReport extends BulkStoryBaseReport {
   error?: string;
 }
 
+export interface BulkPersistStoryReport extends BulkStoryBaseReport {
+  status: BulkPersistStoryStatus;
+  dryRunValid: boolean;
+  sourceHash: string | null;
+  nodeCount: number | null;
+  persistedChapterId: string | null;
+  revalidated: boolean;
+  validationErrors: string[];
+  error?: string;
+}
+
 export interface BulkMigrationReportBase<TMode extends BulkMigrationMode, TStory> {
   mode: TMode;
   generatedAt: string;
@@ -87,7 +100,37 @@ export interface BulkMigrationReportBase<TMode extends BulkMigrationMode, TStory
 
 export type BulkAuditReport = BulkMigrationReportBase<'audit', BulkAuditStoryReport>;
 export type BulkDryRunReport = BulkMigrationReportBase<'dry-run', BulkDryRunStoryReport>;
-export type BulkMigrationReport = BulkAuditReport | BulkDryRunReport;
+export type BulkPersistReport = BulkMigrationReportBase<'persist', BulkPersistStoryReport> & { migrationRunId: string };
+
+export interface BulkRollbackReport {
+  mode: 'rollback';
+  generatedAt: string;
+  converterVersion: string;
+  migrationRunId: string;
+  summary: {
+    targetChapterCount: number;
+    targetAssetCount: number;
+    deletedChapterCount: number;
+    deletedAssetCount: number;
+  };
+  targets: {
+    chapters: Array<{
+      id: string;
+      storyId: string;
+      branchId: string;
+      migrationKind: string | null;
+      sourceHash: string | null;
+    }>;
+    assets: Array<{
+      id: string;
+      storyId: string;
+      chapterId: string | null;
+      scopedAssetId: string;
+    }>;
+  };
+}
+
+export type BulkMigrationReport = BulkAuditReport | BulkDryRunReport | BulkPersistReport | BulkRollbackReport;
 
 export async function writeMigrationReport(reportPath: string, report: BulkMigrationReport): Promise<string> {
   const targetPath = resolveMigrationReportPath(reportPath);

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildBulkMigrationAuditReport,
   buildBulkMigrationDryRunReport,
+  selectPersistCandidates,
   type BulkMigrationCorpus,
   type GeneratedVNChapterSummary,
 } from '@/lib/vn/bulk-migration';
@@ -118,6 +119,35 @@ describe('bulk VN migration dry-run', () => {
     expect(report.stories[0].valid).toBe(false);
     expect(report.stories[0].validationErrors.join('\n')).toContain('unreachable');
     expect('persistedChapterId' in report.stories[0]).toBe(false);
+  });
+
+
+
+  it('selects low-risk valid persist candidates with batch size', () => {
+    const lowStories = Array.from({ length: 6 }, (_, index) => (
+      storyRecord(`story-low-${index}`, [segment(`seg-low-${index}`, `story-low-${index}`, 'main', null)], [])
+    ));
+    const mediumSegments = Array.from({ length: 21 }, (_, index) => (
+      segment(`seg-medium-${index}`, 'story-medium', 'main', index === 0 ? null : `seg-medium-${index - 1}`)
+    ));
+    const report = buildBulkMigrationDryRunReport(corpusFixture([
+      ...lowStories,
+      storyRecord('story-medium', mediumSegments, []),
+      storyRecord('story-empty', [], []),
+    ]));
+
+    const selected = selectPersistCandidates(report, { batchSize: 5 });
+
+    expect(selected).toHaveLength(5);
+    expect(selected.every(story => story.status === 'valid')).toBe(true);
+    expect(selected.every(story => story.risk === 'low')).toBe(true);
+    expect(selected.map(story => story.storyId)).toEqual([
+      'story-low-0',
+      'story-low-1',
+      'story-low-2',
+      'story-low-3',
+      'story-low-4',
+    ]);
   });
 
   it('skips zero-segment and duplicate migration stories in dry-run', () => {
@@ -241,6 +271,9 @@ function chapter(id: string, storyId: string, branchId: string): GeneratedVNChap
     storyId,
     branchId,
     status: 'valid',
+    migrationRunId: null,
+    migrationKind: null,
+    sourceHash: null,
     createdAt: new Date('2026-06-19T00:00:00.000Z'),
   };
 }
