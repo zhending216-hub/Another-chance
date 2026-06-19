@@ -19,6 +19,11 @@ import {
 import type { VNGraphSaveData, VNGraphValidationResult } from './types';
 import { validateVNGraph } from './validator';
 import {
+  buildAIVNImageQualityContract,
+  classifyAIVNImageFailure,
+  type AIVNImageQualityContract,
+} from './image-quality-contract';
+import {
   orchestrateVNGraphVisuals,
   type VNVisualOrchestrationReport,
 } from './visual-orchestration';
@@ -29,6 +34,7 @@ export interface AIVNGeneratedAssetPreview extends VNGeneratedAssetRecord {
   mimeType: string;
   sha256: string;
   prompt: string;
+  quality: AIVNImageQualityContract;
 }
 
 export interface AIVNImageValidationResult {
@@ -147,6 +153,15 @@ export async function generateAIVNChapterAssetPreview(
     mimeType: bytesValidation.mimeType,
     sha256: bytesValidation.sha256,
     prompt: image.prompt,
+    quality: buildAIVNImageQualityContract({
+      category: options.category,
+      chapterId: options.chapterId,
+      storyTitle: options.storyTitle,
+      segmentContent: options.segmentContent,
+      prompt: image.prompt,
+      validationStatus: 'accepted',
+      qualityWarnings: [],
+    }),
   };
 
   const graph = injectAssetIntoGraph(options.graph, options.category, scopedAssetId);
@@ -271,7 +286,7 @@ function nonBlockingFailure(
     category: options.category,
     graph: options.graph,
     graphChanged: false,
-    warning,
+    warning: `${warning} failure=${classifyAIVNImageFailure(error)}`,
     error,
     image,
   };

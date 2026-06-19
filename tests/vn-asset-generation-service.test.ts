@@ -45,6 +45,8 @@ describe('AIVN chapter asset generation service', () => {
     expect(result.asset.assetId).toMatch(/^bg\.gate\.of\.rain\.chapter\.001\.0$/);
     expect(result.asset.mimeType).toBe('image/png');
     expect(result.asset.sha256).toHaveLength(64);
+    expect(result.asset.quality.validation.status).toBe('accepted');
+    expect(result.asset.quality.source.sourceHash).toHaveLength(64);
     expect(result.graphChanged).toBe(true);
     expect(result.validation.valid, result.validation.error).toBe(true);
     expect(result.graph.Nodes[0].Data.BackgroundImage).toEqual({
