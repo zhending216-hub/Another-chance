@@ -9,6 +9,9 @@ describe('VN chapter storage helpers', () => {
       branchId: 'main',
       sourceSegmentId: 'seg-1',
       createdById: 'user-1',
+      migrationRunId: 'run-1',
+      migrationKind: 'story-tree-v1',
+      sourceHash: 'hash-1',
       result: previewResult(true),
     });
 
@@ -16,6 +19,9 @@ describe('VN chapter storage helpers', () => {
     expect(data.validationError).toBeNull();
     expect(data.graphJson).toEqual({ Version: 1, StartNodeIndex: 1, Nodes: [] });
     expect(data.createdById).toBe('user-1');
+    expect(data.migrationRunId).toBe('run-1');
+    expect(data.migrationKind).toBe('story-tree-v1');
+    expect(data.sourceHash).toBe('hash-1');
   });
 
   it('builds invalid chapter create data with raw validation error', () => {

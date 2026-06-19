@@ -9,6 +9,9 @@ export interface SaveVNChapterOptions {
   sourceSegmentId?: string | null;
   createdById?: string | null;
   result: VNGraphPreviewResult;
+  migrationRunId?: string | null;
+  migrationKind?: string | null;
+  sourceHash?: string | null;
 }
 
 export function buildVNChapterCreateData(options: SaveVNChapterOptions) {
@@ -22,6 +25,9 @@ export function buildVNChapterCreateData(options: SaveVNChapterOptions) {
     validationError: options.result.success ? null : options.result.validation.error,
     repairAttempts: options.result.repairAttempts,
     createdById: options.createdById ?? null,
+    migrationRunId: options.migrationRunId ?? null,
+    migrationKind: options.migrationKind ?? null,
+    sourceHash: options.sourceHash ?? null,
   };
 }
 
