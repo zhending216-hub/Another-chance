@@ -49,6 +49,10 @@ Quality reporting writes to ignored `exports/` paths:
 npm run aivn:quality-report -- --out exports/aivn-migration/reports/<file>.json --markdown exports/aivn-migration/reports/<file>.md
 ```
 
+## Cleanup Plan
+
+- [codebase-cleanup-plan.md](architecture/codebase-cleanup-plan.md) - phased cleanup analysis and execution order.
+
 ## Cleanup Boundaries
 
 Safe cleanup targets:
