@@ -26,7 +26,13 @@
     "mobile:run": "./scripts/run-mobile.sh",
     "db:backup": "./scripts/backup-db.sh backup",
     "db:restore": "./scripts/backup-db.sh restore",
-    "db:backups": "./scripts/backup-db.sh list"
+    "db:backups": "./scripts/backup-db.sh list",
+    "typecheck": "tsc --noEmit --pretty false",
+    "test:vn": "vitest run tests/vn-visual-orchestration.test.ts tests/vn-ui-workflow.test.ts tests/vn-aivn-package-assets.test.ts tests/vn-aivn-package.test.ts tests/vn-fused-generation-service.test.ts tests/vn-asset-generation-service.test.ts tests/vn-asset-bridge.test.ts tests/vn-prompt-builder.test.ts tests/vn-generation-service.test.ts tests/generation-context.test.ts tests/generation-contracts.test.ts tests/vn-graph-validator.test.ts tests/vn-export-package.test.ts tests/vn-storage.test.ts tests/vn-tree-migration.test.ts tests/vn-bulk-migration.test.ts tests/vn-migration-run.test.ts tests/vn-phase9-skipped-migration.test.ts tests/vn-fusion-quality-report.test.ts",
+    "test:aivn-package": "vitest run tests/vn-aivn-package.test.ts tests/vn-aivn-package-assets.test.ts tests/vn-export-package.test.ts",
+    "aivn:quality-report": "tsx scripts/report-aivn-fusion-quality.ts",
+    "aivn:backfill:audit": "tsx scripts/backfill-aivn-visuals.ts --audit",
+    "aivn:backfill:dry-run": "tsx scripts/backfill-aivn-visuals.ts --dry-run"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

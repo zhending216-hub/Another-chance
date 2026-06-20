@@ -2,6 +2,26 @@
 
 > 基于历史/经典故事的关键片段和人物产生分叉剧情的故事续写平台
 
+
+## Current Maintenance Notes
+
+The current server runtime uses Prisma + PostgreSQL. The `data/` folder is legacy seed/import data, not the production runtime database.
+
+Canonical structure and maintenance maps:
+
+- [Docs/README.md](Docs/README.md)
+- [Docs/aivn/README.md](Docs/aivn/README.md)
+- [scripts/README.md](scripts/README.md)
+- [tests/README.md](tests/README.md)
+
+AIVN/Gushi release gates:
+
+```bash
+npm run typecheck
+npm run test:vn
+npm run test:aivn-package
+```
+
 ## 项目简介
 
 古事是一个创新的故事续写平台，用户可以选择历史故事的关键转折点（如"秦始皇被成功刺杀"），系统将生成连续的分叉故事线。平台支持 AI 续写、角色建模、时间轴校验、导演模式等功能。
