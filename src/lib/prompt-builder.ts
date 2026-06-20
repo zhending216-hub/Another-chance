@@ -13,11 +13,14 @@ import { PacingEngine } from './pacing-engine';
 import { contextSummarizer, estimateTokens } from './context-summarizer';
 import { EventTracker, buildEventPrompt } from './event-tracker';
 import { branchMemory } from './branch-memory';
+import { createLogger } from './logger';
 import type { PacingConfig, DirectorState, StorySegment } from '@/types/story';
 
 export type BranchMode = 'normal' | 'branchCreation' | 'branchContinuation';
 import prisma from '@/lib/prisma';
 import { INFER_PATTERNS, FICTION_KEYWORDS } from './genre-config';
+
+const logger = createLogger('prompt-builder');
 
 export interface BuildPromptOptions {
   storyId: string;
@@ -76,7 +79,7 @@ export function correctCharacterNames(text: string, knownNames: string[]): strin
       }
       if (diffs === 1) {
         result = result.slice(0, i) + correctName + result.slice(i + correctName.length);
-        console.log(`[name-correct] "${candidate}" → "${correctName}" (pos ${i})`);
+        logger.debug(`[name-correct] "${candidate}" → "${correctName}" (pos ${i})`);
         i += correctName.length; // 跳过已替换区域，防止重叠纠正
         correctionCount++;
       } else {
@@ -306,14 +309,14 @@ export async function buildFullPrompt(options: BuildPromptOptions): Promise<Buil
   const isFiction = FICTION_KEYWORDS.some(k => effectiveGenre.includes(k));
 
   // ─── 诊断日志：Genre 分类决策 ───
-  console.log('\n' + '-'.repeat(60));
-  console.log('\x1b[33m[prompt-builder]\x1b[0m Genre 分类决策流程');
-  console.log(`  Step 1 rawGenre:      "\x1b[31m${rawGenre}\x1b[0m"`);
-  console.log(`  Step 2 inferredGenre:  "\x1b[32m${inferredGenre}\x1b[0m"${inferredGenre ? ` (从description匹配)` : ' (未匹配任何模式)'}`);
-  console.log(`  Step 3 effectiveGenre: "\x1b[36m${effectiveGenre || '(空)'}\x1b[0m"`);
-  console.log(`  Step 4 isFiction:      \x1b[${isFiction ? '32' : '31'}m${isFiction}\x1b[0m`);
-  console.log(`  description 前80字:    "${description.slice(0, 80)}"`);
-  console.log('-'.repeat(60));
+  logger.debug('\n' + '-'.repeat(60));
+  logger.debug('\x1b[33m[prompt-builder]\x1b[0m Genre 分类决策流程');
+  logger.debug(`  Step 1 rawGenre:      "\x1b[31m${rawGenre}\x1b[0m"`);
+  logger.debug(`  Step 2 inferredGenre:  "\x1b[32m${inferredGenre}\x1b[0m"${inferredGenre ? ` (从description匹配)` : ' (未匹配任何模式)'}`);
+  logger.debug(`  Step 3 effectiveGenre: "\x1b[36m${effectiveGenre || '(空)'}\x1b[0m"`);
+  logger.debug(`  Step 4 isFiction:      \x1b[${isFiction ? '32' : '31'}m${isFiction}\x1b[0m`);
+  logger.debug(`  description 前80字:    "${description.slice(0, 80)}"`);
+  logger.debug('-'.repeat(60));
 
   // 根据 effectiveGenre 选择风格指令
   let styleInstruction: string;
@@ -379,7 +382,7 @@ export async function buildFullPrompt(options: BuildPromptOptions): Promise<Buil
       '你是一位精通中国历史的文学作家，擅长古典文学风格的写作。请用半文半白的古风文体写作，' +
       '注重史实准确性，善用典故和古典修辞。叙事庄重典雅，人物言行符合时代特征。保持与前文的风格和情节连续性。';
   }
-  console.log(`  \x1b[35m→ 风格指令:\x1b[0m ${styleInstruction}`);
+  logger.debug(`  \x1b[35m→ 风格指令:\x1b[0m ${styleInstruction}`);
   parts.push(styleInstruction);
 
   if (inferredGenre && !rawGenre) {
@@ -399,7 +402,7 @@ export async function buildFullPrompt(options: BuildPromptOptions): Promise<Buil
 
     if (isGufeng) {
       styleOverrideActive = true;
-      console.log(`  \x1b[35m→ 前文古风检测:\x1b[0m 检测到 ${gufengCount}/15 古风信号词，注入风格覆盖指令（并跳过 styleAnchor）`);
+      logger.debug(`  \x1b[35m→ 前文古风检测:\x1b[0m 检测到 ${gufengCount}/15 古风信号词，注入风格覆盖指令（并跳过 styleAnchor）`);
       parts.push(
         `【风格覆盖指令 — 最高优先级】\n` +
         `本作品属于"${effectiveGenre || '虚构'}"类型，必须使用现代白话文写作。\n` +
@@ -613,7 +616,7 @@ export async function buildFullPrompt(options: BuildPromptOptions): Promise<Buil
 
   // 如果 Character 表有数据，直接使用
   if (registeredCharacterNames.length > 0) {
-    console.log(`  已注册角色: ${registeredCharacterNames.join(', ')}`);
+    logger.debug(`  已注册角色: ${registeredCharacterNames.join(', ')}`);
   } else {
     // 冷启动兜底：从 chain 文本中提取人名（使用更严格的启发式）
     if (chain.length > 0) {
@@ -656,12 +659,12 @@ export async function buildFullPrompt(options: BuildPromptOptions): Promise<Buil
   const fullPrompt = parts.join('\n\n');
 
   // ─── 诊断日志：最终 prompt 预览 ───
-  console.log('\n' + '-'.repeat(60));
-  console.log('\x1b[33m[prompt-builder]\x1b[0m 最终 Prompt 预览 (前300字):');
-  console.log('\x1b[90m' + fullPrompt.slice(0, 300) + '\x1b[0m');
-  console.log(`  总长度: ${fullPrompt.length} 字符`);
-  console.log(`  已知角色名: ${knownCharacterNames.join(', ') || '(无)'}`);
-  console.log('-'.repeat(60) + '\n');
+  logger.debug('\n' + '-'.repeat(60));
+  logger.debug('\x1b[33m[prompt-builder]\x1b[0m 最终 Prompt 预览 (前300字):');
+  logger.debug('\x1b[90m' + fullPrompt.slice(0, 300) + '\x1b[0m');
+  logger.debug(`  总长度: ${fullPrompt.length} 字符`);
+  logger.debug(`  已知角色名: ${knownCharacterNames.join(', ') || '(无)'}`);
+  logger.debug('-'.repeat(60) + '\n');
 
   return { prompt: fullPrompt, knownCharacterNames, registeredCharacterNames };
 }

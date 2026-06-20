@@ -16,6 +16,7 @@
 import { join } from 'path';
 import { writeFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
+import { createLogger } from './logger';
 import { extractJsonFromAI } from './ai-client';
 import type { ReferenceImageHint } from './reference-image-search';
 import {
@@ -26,6 +27,8 @@ import {
   type GeneratedImage,
 } from './image-styles';
 
+const logger = createLogger('image-generator');
+
 // Re-export for convenience
 export {
   IMAGE_STYLES,
@@ -34,6 +37,7 @@ export {
   type SceneDescription,
   type GeneratedImage,
 } from './image-styles';
+
 
 // ─── 配置 ───────────────────────────────────────────────────────────
 
@@ -528,7 +532,7 @@ export async function generateImagesForSegment(
                 : s.prompt,
             }));
             translated = true;
-            console.log('[image-generator] 启发式场景已翻译为英文 prompt');
+            logger.debug('[image-generator] 启发式场景已翻译为英文 prompt');
           }
         } else {
           console.warn('[image-generator] AI 翻译返回空响应');
@@ -588,9 +592,9 @@ export async function generateImagesForSegment(
     });
     // 强力抑制：去 CJK、去引号短语、强抑制指令（GLM/cogview 无 negative_prompt）
     const styledPrompt = enforceNoTextInPrompt(styledPromptRaw);
-    console.log(`\n[image-generator] ===== 最终图片 prompt (scene ${i}) =====`);
-    console.log(styledPrompt);
-    console.log('[image-generator] ========================================\n');
+    logger.debug(`\n[image-generator] ===== 最终图片 prompt (scene ${i}) =====`);
+    logger.debug(styledPrompt);
+    logger.debug('[image-generator] ========================================\n');
     // 同段内 3 张图用不同 seed（sceneSeed = baseSeed + i），保持角色一致但构图各异
     const sceneSeed = typeof seed === 'number' ? seed + i : undefined;
 
@@ -616,7 +620,7 @@ export async function generateImagesForSegment(
           throw new Error('API 返回数据中无有效图片');
         }
 
-        console.log(`[image-generator] 图片生成成功: ${imageUrl}`);
+        logger.debug(`[image-generator] 图片生成成功: ${imageUrl}`);
         return { url: imageUrl, description: scene.description, type: scene.type, prompt: styledPrompt };
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
