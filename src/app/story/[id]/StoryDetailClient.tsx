@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import CharacterPanel from '@/components/CharacterPanel';
@@ -19,6 +19,7 @@ import CommentSection from '@/components/social/CommentSection';
 import VisibilityToggle from '@/components/social/VisibilityToggle';
 import ForkBadge from '@/components/social/ForkBadge';
 import { useStoryData } from './hooks/useStoryData';
+import { useStoryContinuation } from './hooks/useStoryContinuation';
 
 interface StoryDetailClientProps {
   storyId: string;
@@ -41,8 +42,28 @@ export default function StoryDetailClient({ storyId }: StoryDetailClientProps) {
     loadBranchSegments,
     loadTree,
   } = useStoryData(id);
-  const [continuing, setContinuing] = useState(false);
-  const [newContent, setNewContent] = useState('');
+  const {
+    continuing,
+    newContent,
+    displayedLines,
+    lineStep,
+    pacingConfig,
+    setPacingConfig,
+    isPaused,
+    handlePause,
+    handleResume,
+    advanceLines,
+    handleContinue,
+    checkingPlausibility,
+    plausibilityReport,
+    showPlausibility,
+    setShowPlausibility,
+  } = useStoryContinuation({
+    storyId: id,
+    branchId: currentBranchId,
+    loadBranchSegments,
+    loadTree,
+  });
   const [showBranchDialog, setShowBranchDialog] = useState(false);
   const [branchingSegmentId, setBranchingSegmentId] = useState<string | null>(null);
   const [userDirection, setUserDirection] = useState('');
@@ -63,14 +84,8 @@ export default function StoryDetailClient({ storyId }: StoryDetailClientProps) {
   const [editingContent, setEditingContent] = useState('');
   const [editingTitle, setEditingTitle] = useState('');
   const [savingSegment, setSavingSegment] = useState(false);
-  const [pacingConfig, setPacingConfig] = useState<PacingConfig>({ pace: 'detailed', maxLinesPerStep: 5 });
-  const [isPaused, setIsPaused] = useState(false);
   const [suggestedDirections, setSuggestedDirections] = useState<Array<{ icon: string; label: string; desc: string }>>([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
-  const [displayedLines, setDisplayedLines] = useState<string[]>([]);
-  const [lineStep, setLineStep] = useState(0);
-  const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
   // P6-2: 图片生成状态
   const [regeneratingImageForSeg, setRegeneratingImageForSeg] = useState<string | null>(null);
   const [imageStyle, setImageStyle] = useState<ImageStyle>('ink-wash');
@@ -78,9 +93,6 @@ export default function StoryDetailClient({ storyId }: StoryDetailClientProps) {
   // 自动续写
   const [showAutoContinue, setShowAutoContinue] = useState(false);
   // 合理性检测
-  const [showPlausibility, setShowPlausibility] = useState(false);
-  const [plausibilityReport, setPlausibilityReport] = useState<any>(null);
-  const [checkingPlausibility, setCheckingPlausibility] = useState(false);
   // AIVN VN chapter workflow
   const [showVNPanel, setShowVNPanel] = useState(false);
 
@@ -110,124 +122,9 @@ export default function StoryDetailClient({ storyId }: StoryDetailClientProps) {
       .catch(() => {});
   }, [story, segments]);
 
-  // C6.6: Streaming with line-level stepping
-  useEffect(() => {
-    if (!newContent) { setDisplayedLines([]); setLineStep(0); return; }
-    const lines = newContent.split('\n').filter(l => l.trim());
-    setDisplayedLines(lines);
-    const max = pacingConfig.maxLinesPerStep || 5;
-    if (!isPaused) {
-      setLineStep(Math.min(lines.length, max));
-    }
-  }, [newContent, isPaused, pacingConfig.maxLinesPerStep]);
-
-  const advanceLines = () => {
-    const max = pacingConfig.maxLinesPerStep || 5;
-    setLineStep(prev => Math.min(prev + max, displayedLines.length));
-  };
-
-  const handlePause = () => setIsPaused(true);
-  const handleResume = () => {
-    setIsPaused(false);
-    const max = pacingConfig.maxLinesPerStep || 5;
-    setLineStep(prev => Math.min(prev + max, displayedLines.length));
-  };
-
   const getTailSegment = () => {
     const childIds = new Set(segments.map(s => s.parentSegmentId).filter(Boolean));
     return segments.find(s => !childIds.has(s.id));
-  };
-
-  const handleContinue = async () => {
-    if (continuing) return;
-    setContinuing(true);
-    setNewContent('');
-    setLineStep(0);
-    setIsPaused(false);
-
-    try {
-      const res = await fetch(`/api/stories/${id}/stream-continue`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          branchId: currentBranchId,
-          pacingConfig,
-        })
-      });
-
-      if (!res.ok) throw new Error('续写失败');
-      const reader = res.body?.getReader();
-      readerRef.current = reader || null;
-      const decoder = new TextDecoder();
-      let full = '';
-
-      while (reader) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        for (const line of chunk.split('\n')) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6);
-            if (data === '[DONE]') break;
-            try {
-              const parsed = JSON.parse(data);
-              // 只累积原始流式 content，忽略 line 事件（后端发 line 时不再发原始 content）
-              if (parsed.content && parsed.type !== 'line') {
-                full += parsed.content;
-                setNewContent(full);
-              }
-              if (parsed.type === 'pause') {
-                setIsPaused(true);
-              }
-              if (parsed.type === 'error' && parsed.message) {
-                alert(parsed.message);
-                await loadBranchSegments(currentBranchId);
-                return;
-              }
-              if (parsed.type === 'metadata' && parsed.data) {
-                // Could update UI with metadata
-              }
-            } catch {}
-          }
-        }
-      }
-
-      await loadBranchSegments(currentBranchId);
-      await loadTree();
-      setNewContent('');
-      setDisplayedLines([]);
-
-      // 续写完成后自动进行合理性检测
-      const latestSegments = await fetch(`/api/stories/${id}/segments?branchId=${currentBranchId}`).then(r => r.json());
-      const latestSegment = latestSegments.segments?.[latestSegments.segments.length - 1];
-      if (latestSegment) {
-        setCheckingPlausibility(true);
-        try {
-          const checkRes = await fetch(`/api/stories/${id}/plausibility`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ segmentId: latestSegment.id, branchId: currentBranchId }),
-          });
-          if (checkRes.ok) {
-            const checkData = await checkRes.json();
-            setPlausibilityReport(checkData.report);
-            // 如果有问题，自动展开面板
-            if (checkData.report?.issues?.length > 0) {
-              setShowPlausibility(true);
-            }
-          }
-        } catch (e) {
-          console.warn('合理性检测失败:', e);
-        } finally {
-          setCheckingPlausibility(false);
-        }
-      }
-    } catch (e) {
-      alert('续写失败: ' + (e instanceof Error ? e.message : '请重试'));
-    } finally {
-      setContinuing(false);
-      readerRef.current = null;
-    }
   };
 
   // P6-2: 重新生成段落图片
