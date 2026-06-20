@@ -4,31 +4,30 @@ import type {
   VNAssetWhitelist,
   VNCharacterEntry,
   VNCharacterTable,
-  VNDynamicOutputSchema,
   VNGraphSaveData,
   VNGraphValidationOptions,
   VNGraphValidationResult,
   VNNodeFactorySchema,
   VNNodeSaveData,
   VNNodeSchemaDocument,
-  VNOutputSchema,
   VNOutputSpec,
-  VNResourceFieldSchema,
   VNSerializedValue,
   VNValueSchema,
 } from './types';
+import { validateResourceFields, normalizeAssetId } from './validator-assets';
+import {
+  buildOutputSpecs,
+  collectNodesThatCanReachEnd,
+  collectReachableNodeIndexes,
+  factoryKey,
+  hasProgressionOutput,
+  isEndNode,
+  isStartNode,
+  normalizeNodeTypeValue,
+} from './validator-traversal';
 
 const defaultSchema = rawSchema as unknown as VNNodeSchemaDocument;
 
-const NODE_TYPE_VALUES: Record<string, number> = {
-  Progress: 1,
-  Action: 2,
-  Condition: 3,
-};
-
-const PROGRESS_NODE_TYPE = 1;
-const START_SUBTYPE = 6;
-const END_SUBTYPE = 11;
 const REQUIRED_TEXT_OBJECT_PATHS = new Set(['Options[]', 'Lines[]']);
 
 export function parseAndValidateVNGraphJson(
@@ -282,80 +281,6 @@ function validateObject(
   return ok();
 }
 
-function validateResourceFields(
-  node: VNNodeSaveData,
-  resourceFields: VNResourceFieldSchema[],
-  options: VNGraphValidationOptions,
-): VNGraphValidationResult {
-  for (const field of resourceFields) {
-    const rootValue = node.Data[field.RootFieldName];
-    if (!rootValue) continue;
-
-    const result = field.IsTopLevelField
-      ? validateResourceValue(`node #${node.Index}.${field.FieldPath}`, field, rootValue, options)
-      : validateNestedResourceValue(`node #${node.Index}.${field.FieldPath}`, field, rootValue, options);
-    if (!result.valid) return result;
-  }
-
-  return ok();
-}
-
-function validateNestedResourceValue(
-  displayPath: string,
-  field: VNResourceFieldSchema,
-  value: VNSerializedValue,
-  options: VNGraphValidationOptions,
-): VNGraphValidationResult {
-  if (!isRecord(value)) return ok();
-  if (value.Kind === 'String' && leafName(displayPath) === field.FieldName) {
-    return validateResourceValue(displayPath, field, value, options);
-  }
-  if (value.Kind === 'List' && Array.isArray(value.Items)) {
-    for (let i = 0; i < value.Items.length; i++) {
-      const result = validateNestedResourceValue(`${displayPath}[${i}]`, field, value.Items[i], options);
-      if (!result.valid) return result;
-    }
-  }
-  if (value.Kind === 'Object' && isRecord(value.ObjectValue)) {
-    for (const [key, child] of Object.entries(value.ObjectValue)) {
-      const result = validateNestedResourceValue(`${displayPath}.${key}`, field, child, options);
-      if (!result.valid) return result;
-    }
-  }
-  return ok();
-}
-
-function validateResourceValue(
-  displayPath: string,
-  field: VNResourceFieldSchema,
-  value: VNSerializedValue,
-  options: VNGraphValidationOptions,
-): VNGraphValidationResult {
-  if (value.Kind !== 'String') return ok();
-  const reference = normalizeAssetId(value.StringValue ?? '');
-  if (!reference) return ok();
-
-  if (!options.assetWhitelist) {
-    return fail(`${displayPath} references an asset without a whitelist: ${reference}.`);
-  }
-
-  if (field.Category !== 'Chapter') {
-    if (!hasAssetsScope(reference)) return fail(`${displayPath} must be empty or an assets: scoped id.`);
-    if (!options.assetWhitelist.contains(field.Category, reference)) {
-      return fail(`${displayPath} references an asset outside the whitelist: ${reference}.`);
-    }
-  }
-
-  if (!options.assetResolver) {
-    return fail(`${displayPath} references an asset without a resolver: ${reference}.`);
-  }
-
-  const resolved = options.assetResolver.resolve(reference, field.AssetType, field.Category);
-  if (!resolved) return fail(`${displayPath} references an unresolved asset: ${reference}.`);
-  if (typeof resolved === 'string' && !resolved.trim()) return fail(`${displayPath} resolved to an empty path: ${reference}.`);
-  return ok();
-}
-
 function validateOutputs(
   node: VNNodeSaveData,
   nodesByIndex: Map<number, VNNodeSaveData>,
@@ -474,101 +399,6 @@ function buildSchemaIndex(schema: VNNodeSchemaDocument): Map<string, VNNodeFacto
   return result;
 }
 
-function buildOutputSpecs(factory: VNNodeFactorySchema, data: Record<string, VNSerializedValue>): Map<string, VNOutputSpec> {
-  const specs = new Map<string, VNOutputSpec>();
-  for (const output of factory.Outputs ?? []) {
-    specs.set(output.Key, outputSpecFrom(output));
-  }
-  for (const dynamicOutput of factory.DynamicOutputs ?? []) {
-    const list = data[dynamicOutput.ListFieldName];
-    const count = list?.Kind === 'List' && Array.isArray(list.Items) ? list.Items.length : 0;
-    for (let i = 0; i < count; i++) {
-      const key = dynamicOutput.KeyTemplate.replace('[i]', `[${i}]`);
-      specs.set(key, outputSpecFrom(dynamicOutput, key));
-    }
-  }
-  return specs;
-}
-
-function outputSpecFrom(output: VNOutputSchema | VNDynamicOutputSchema, key?: string): VNOutputSpec {
-  const outputKey = key ?? ('Key' in output ? output.Key : output.KeyTemplate);
-  return {
-    Key: outputKey,
-    Capacity: output.Capacity ?? 0,
-    AllowedTargetTypeValues: output.AllowedTargetTypeValues ?? [],
-    TargetsProgress: !!output.TargetsProgress,
-  };
-}
-
-function collectReachableNodeIndexes(startNodeIndex: number, nodesByIndex: Map<number, VNNodeSaveData>): Set<number> {
-  const visited = new Set<number>();
-  const stack = [startNodeIndex];
-  while (stack.length > 0) {
-    const index = stack.pop()!;
-    if (visited.has(index)) continue;
-    const node = nodesByIndex.get(index);
-    if (!node) continue;
-    visited.add(index);
-    for (const targets of Object.values(node.Outputs ?? {})) {
-      if (!Array.isArray(targets)) continue;
-      for (const target of targets) stack.push(target);
-    }
-  }
-  return visited;
-}
-
-function collectNodesThatCanReachEnd(
-  reachable: Set<number>,
-  nodesByIndex: Map<number, VNNodeSaveData>,
-  schemaIndex: Map<string, VNNodeFactorySchema>,
-): Set<number> {
-  const reverse = new Map<number, number[]>();
-  const endIndexes: number[] = [];
-  for (const index of reachable) {
-    const node = nodesByIndex.get(index);
-    if (!node) continue;
-    if (isEndNode(node)) endIndexes.push(index);
-    for (const target of progressionTargets(node, schemaIndex)) {
-      if (!reachable.has(target)) continue;
-      const incoming = reverse.get(target) ?? [];
-      incoming.push(index);
-      reverse.set(target, incoming);
-    }
-  }
-
-  const canReachEnd = new Set<number>();
-  const stack = [...endIndexes];
-  while (stack.length > 0) {
-    const index = stack.pop()!;
-    if (canReachEnd.has(index)) continue;
-    canReachEnd.add(index);
-    for (const source of reverse.get(index) ?? []) stack.push(source);
-  }
-  return canReachEnd;
-}
-
-function progressionTargets(node: VNNodeSaveData, schemaIndex: Map<string, VNNodeFactorySchema>): number[] {
-  const factory = schemaIndex.get(factoryKey(normalizeNodeTypeValue(node.NodeType) ?? -1, node.SubType));
-  if (!factory) return [];
-  const specs = buildOutputSpecs(factory, node.Data ?? {});
-  const targets: number[] = [];
-  for (const spec of specs.values()) {
-    if (!spec.TargetsProgress) continue;
-    const values = node.Outputs?.[spec.Key];
-    if (Array.isArray(values)) targets.push(...values);
-  }
-  return targets;
-}
-
-function hasProgressionOutput(node: VNNodeSaveData, schemaIndex: Map<string, VNNodeFactorySchema>): boolean {
-  const factory = schemaIndex.get(factoryKey(normalizeNodeTypeValue(node.NodeType) ?? -1, node.SubType));
-  if (!factory) return false;
-  for (const spec of buildOutputSpecs(factory, node.Data ?? {}).values()) {
-    if (spec.TargetsProgress) return true;
-  }
-  return false;
-}
-
 function isKnownSpeaker(options: VNGraphValidationOptions, speakerId: string): boolean {
   const speaker = speakerId.trim();
   if (!speaker) return true;
@@ -588,14 +418,6 @@ function characterNames(entry: VNCharacterEntry): string[] {
   return [entry.id, entry.Id, entry.displayName, entry.DisplayName, entry.name, entry.Name, ...(entry.aliases ?? []), ...(entry.Aliases ?? [])]
     .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
     .map(value => value.trim());
-}
-
-function isStartNode(node: VNNodeSaveData): boolean {
-  return normalizeNodeTypeValue(node.NodeType) === PROGRESS_NODE_TYPE && node.SubType === START_SUBTYPE;
-}
-
-function isEndNode(node: VNNodeSaveData): boolean {
-  return normalizeNodeTypeValue(node.NodeType) === PROGRESS_NODE_TYPE && node.SubType === END_SUBTYPE;
 }
 
 function isCleanContinuationEndNode(node: VNNodeSaveData): boolean {
@@ -623,27 +445,8 @@ function leafName(path: string): string {
   return text;
 }
 
-function normalizeNodeTypeValue(value: number | string | undefined | null): number | null {
-  if (typeof value === 'number' && Number.isInteger(value)) return value;
-  if (typeof value === 'string') return NODE_TYPE_VALUES[value] ?? null;
-  return null;
-}
-
-function normalizeAssetId(value: string): string {
-  return (value ?? '').trim();
-}
-
-function hasAssetsScope(value: string): boolean {
-  const index = value.indexOf(':');
-  return index > 0 && value.slice(0, index).toLowerCase() === 'assets';
-}
-
 function finiteFields(value: VNSerializedValue, fields: Array<'X' | 'Y' | 'Z' | 'W'>): boolean {
   return fields.every(field => Number.isFinite(value[field]));
-}
-
-function factoryKey(nodeTypeValue: number, subType: number): string {
-  return `${nodeTypeValue}:${subType}`;
 }
 
 function isRecord(value: unknown): value is Record<string, any> {
