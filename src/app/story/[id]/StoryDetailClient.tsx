@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import CharacterPanel from '@/components/CharacterPanel';
@@ -18,21 +18,7 @@ import LikeButton from '@/components/social/LikeButton';
 import CommentSection from '@/components/social/CommentSection';
 import VisibilityToggle from '@/components/social/VisibilityToggle';
 import ForkBadge from '@/components/social/ForkBadge';
-
-interface Story {
-  id: string;
-  title: string;
-  description?: string;
-  author?: string;
-  era?: string;
-  genre?: string;
-  characterIds?: string[];
-  visibility?: string;
-  ownerId?: string;
-  likeCount?: number;
-  isLiked?: boolean;
-  coverImageUrl?: string;
-}
+import { useStoryData } from './hooks/useStoryData';
 
 interface StoryDetailClientProps {
   storyId: string;
@@ -41,14 +27,22 @@ interface StoryDetailClientProps {
 export default function StoryDetailClient({ storyId }: StoryDetailClientProps) {
   const id = storyId;
   const { data: session } = useSession();
-  const [story, setStory] = useState<Story | null>(null);
-  const [segments, setSegments] = useState<StorySegment[]>([]);
-  const [branches, setBranches] = useState<StoryBranch[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    story,
+    setStory,
+    segments,
+    branches,
+    loading,
+    error,
+    currentBranchId,
+    setCurrentBranchId,
+    editForm,
+    setEditForm,
+    loadBranchSegments,
+    loadTree,
+  } = useStoryData(id);
   const [continuing, setContinuing] = useState(false);
   const [newContent, setNewContent] = useState('');
-  const [currentBranchId, setCurrentBranchId] = useState('main');
   const [showBranchDialog, setShowBranchDialog] = useState(false);
   const [branchingSegmentId, setBranchingSegmentId] = useState<string | null>(null);
   const [userDirection, setUserDirection] = useState('');
@@ -62,7 +56,6 @@ export default function StoryDetailClient({ storyId }: StoryDetailClientProps) {
   const [showDirectorSidebar, setShowDirectorSidebar] = useState(false);
   const [showTimeline, setShowTimeline] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
-  const [editForm, setEditForm] = useState({ title: '', description: '', genre: '', era: '', author: '', visibility: 'PRIVATE' });
   const [saving, setSaving] = useState(false);
   const [regeneratingCover, setRegeneratingCover] = useState(false);
   // 段落编辑/删除
@@ -93,54 +86,6 @@ export default function StoryDetailClient({ storyId }: StoryDetailClientProps) {
 
   const isOwner = !!session?.user?.id && story?.ownerId === session.user.id;
 
-  const loadBranchSegments = useCallback(async (branchId: string) => {
-    const segRes = await fetch(`/api/stories/${id}/segments?branchId=${branchId}`);
-    if (segRes.ok) {
-      const segData = await segRes.json();
-      setSegments(segData.segments || []);
-    }
-  }, [id]);
-
-  const loadTree = useCallback(async () => {
-    const treeRes = await fetch(`/api/stories/${id}/tree`);
-    if (treeRes.ok) {
-      const treeData = await treeRes.json();
-      setBranches(treeData.branches || []);
-    }
-  }, [id]);
-
-  useEffect(() => {
-    async function load() {
-      try {
-        const [sRes, treeRes] = await Promise.all([
-          fetch(`/api/stories/${id}`),
-          fetch(`/api/stories/${id}/tree`)
-        ]);
-        if (!sRes.ok || !treeRes.ok) throw new Error('加载失败');
-        
-        const sData = await sRes.json();
-        const treeData = await treeRes.json();
-        
-        setStory(sData.story);
-        setEditForm({
-          title: sData.story.title || '',
-          description: sData.story.description || '',
-          genre: sData.story.genre || '',
-          era: sData.story.era || '',
-          author: sData.story.author || '',
-          visibility: sData.story.visibility || 'PRIVATE',
-        });
-        setBranches(treeData.branches || []);
-        setCurrentBranchId('main');
-      } catch (e) {
-        setError(e instanceof Error ? e.message : '未知错误');
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
-  }, [id]);
-
   // 加载风格推荐
   useEffect(() => {
     setImageStyle('auto');
@@ -164,10 +109,6 @@ export default function StoryDetailClient({ storyId }: StoryDetailClientProps) {
       })
       .catch(() => {});
   }, [story, segments]);
-
-  useEffect(() => {
-    if (!loading) loadBranchSegments(currentBranchId);
-  }, [currentBranchId, loading, loadBranchSegments]);
 
   // C6.6: Streaming with line-level stepping
   useEffect(() => {
