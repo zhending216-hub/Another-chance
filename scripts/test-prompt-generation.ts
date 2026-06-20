@@ -94,7 +94,6 @@ async function testPromptGeneration() {
         pace: 'detailed',
         mood: 'tense',
         maxLinesPerStep: 3,
-        pauseAfterParagraph: true,
       }
     });
 
