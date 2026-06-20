@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { getUserIdFromRequest } from '@/lib/auth-helpers';
-import { canViewStory } from '@/lib/permissions';
 import { getOrderedChain } from '@/lib/chain-helpers';
 import { buildFullPrompt, correctCharacterNames } from '@/lib/prompt-builder';
 import { PacingEngine } from '@/lib/pacing-engine';
@@ -12,131 +10,21 @@ import { characterManager } from '@/lib/character-engine';
 import { directorManager } from '@/lib/director-manager';
 import { EventTracker } from '@/lib/event-tracker';
 import { triggerBackup } from '@/lib/auto-backup';
-
-/**
- * 从推理模型的 reasoning_content 中提取最终答案
- * 推理模型的思考过程通常包含：分析步骤、约束检查、修订文本等
- * 需要过滤掉这些思考内容，只保留最终的正文输出
- */
-function extractFinalAnswer(reasoning: string): string {
-  const trimmed = reasoning.trim();
-
-  // 策略1：查找 markdown 格式的修订文本块
-  // 推理模型常用格式：**修订文本：** 或 **最终文本：**
-  const revisionPatterns = [
-    /\*{1,2}修订文本[：:]\*{1,2}\s*\n?/,
-    /\*{1,2}最终文本[：:]\*{1,2}\s*\n?/,
-    /\*{1,2}润色后[：:]\*{1,2}\s*\n?/,
-    /\*{1,2}正文[：:]\*{1,2}\s*\n?/,
-  ];
-  for (const pattern of revisionPatterns) {
-    const match = trimmed.match(pattern);
-    if (match) {
-      const afterMarker = trimmed.slice(match.index! + match[0].length);
-      // 提取到下一个 markdown 标记或思考步骤之前
-      const nextMarker = afterMarker.search(/\n\s*\d+\.\s+\*{1,2}|$/);
-      if (nextMarker > 50) {
-        return afterMarker.slice(0, nextMarker).trim();
-      }
-      return afterMarker.trim();
-    }
-  }
-
-  // 策略2：过滤掉常见的思考过程标记
-  // 如：数字编号步骤、**对照约束检查**、**最终润色** 等
-  const thinkingPatterns = [
-    /^\d+\.\s+\*{1,2}[^*]+\*{1,2}[：:]/gm,  // 1. **步骤名称**：
-    /\*{1,2}对照约束检查\*{1,2}/g,
-    /\*{1,2}最终润色\*{1,2}/g,
-    /\*{1,2}检查[：:]\*{1,2}/g,
-    /\*{1,2}分析[：:]\*{1,2}/g,
-    /\*{1,2}思考[：:]\*{1,2}/g,
-  ];
-
-  let cleaned = trimmed;
-  for (const pattern of thinkingPatterns) {
-    cleaned = cleaned.replace(pattern, '');
-  }
-
-  // 策略3：提取纯叙事文本段落（不含思考标记）
-  // 叙事文本特征：以场景描写或人物动作开头，无编号和 **标记
-  const paragraphs = cleaned.split(/\n\n+/).filter(p => {
-    const line = p.trim();
-    // 过滤掉思考过程段落
-    if (line.match(/^\d+\./)) return false;  // 数字编号开头
-    if (line.match(/^\*{1,2}/)) return false;  // markdown 强调开头
-    if (line.match(/^[（\(]\d+[）\)]/)) return false;  // (1) (2) 等编号
-    if (line.length < 30) return false;  // 过短段落
-    return true;
-  });
-
-  if (paragraphs.length > 0) {
-    // 合并所有叙事段落
-    return paragraphs.join('\n\n').trim();
-  }
-
-  // 策略4：查找常见答案分隔标记
-  const markers = ['因此，', '综上所述，', '乃', '于是'];
-  for (const marker of markers) {
-    const idx = trimmed.lastIndexOf(marker);
-    if (idx !== -1 && idx < trimmed.length - 100) {
-      // 从标记处取到下一个思考步骤之前
-      const afterMarker = trimmed.slice(idx);
-      const nextThinking = afterMarker.search(/\n\s*\d+\.\s+\*{1,2}|$/);
-      return afterMarker.slice(0, nextThinking).trim();
-    }
-  }
-
-  // 策略5：取最后一个完整的叙事段落
-  const allLines = trimmed.split(/\n+/);
-  const narrativeLines: string[] = [];
-  for (let i = allLines.length - 1; i >= 0; i--) {
-    const line = allLines[i].trim();
-    if (line.match(/^\d+\.\s+\*{1,2}/) || line.match(/^[（\(]\d+[）\)]/)) {
-      break;  // 遇到思考步骤标记，停止
-    }
-    if (line.length > 20 && !line.match(/^\*{1,2}/)) {
-      narrativeLines.unshift(line);
-    }
-    if (narrativeLines.length >= 5) break;  // 收集足够内容后停止
-  }
-
-  if (narrativeLines.length > 0) {
-    return narrativeLines.join('\n').trim();
-  }
-
-  return trimmed;
-}
+import { loadContinuationContext } from '@/lib/continuation/context';
+import { collectConsistencyWarnings } from '@/lib/continuation/consistency';
+import { extractFinalAnswer, getContinuationMaxTokens, isReasoningModelName } from '@/lib/continuation/generation';
 
 export async function POST(
   request: NextRequest,
   { params }: { params: { id: string } },
 ) {
   try {
-    const userId = await getUserIdFromRequest(request);
-    if (!userId) {
-      return NextResponse.json({ error: '请先登录' }, { status: 401 });
-    }
-
     const { id: storyId } = params;
     const { branchId = 'main', pacingConfig, directorOverrides } = await request.json();
+    const contextResult = await loadContinuationContext(request, storyId, branchId);
+    if (!contextResult.ok) return contextResult.response;
 
-    if (!storyId) {
-      return NextResponse.json({ error: '缺少参数' }, { status: 400 });
-    }
-
-    const story = await prisma.story.findUnique({ where: { id: storyId } });
-    if (!story) return NextResponse.json({ error: '故事不存在' }, { status: 404 });
-
-    if (!canViewStory(story, userId)) {
-      return NextResponse.json({ error: '无权查看' }, { status: 403 });
-    }
-
-    const chain = await getOrderedChain(storyId, branchId);
-    if (chain.length === 0) {
-      return NextResponse.json({ error: '该分支没有段落' }, { status: 404 });
-    }
-    const tailSegment = chain[chain.length - 1];
+    const { story, chain, tailSegment } = contextResult.context;
 
     let prompt: string;
     let registeredCharacterNames: string[] = [];
@@ -178,15 +66,7 @@ ${styleHint}，续写下一段（150-300字），与前文情节连续。`;
 
     const pacingEngine = pacingConfig ? new PacingEngine(pacingConfig) : null;
 
-    let consistencyWarnings: string[] = [];
-    try {
-      const preIssues = await consistencyChecker.checkChainConsistency(chain as any);
-      if (preIssues.length > 0) {
-        consistencyWarnings = preIssues.map((i: any) => `[${i.severity}] ${i.description}`);
-      }
-    } catch (e) {
-      console.warn('[stream-continue] 矛盾检测失败:', e);
-    }
+    const consistencyWarnings = await collectConsistencyWarnings(chain, '[stream-continue]');
 
     const metadataEvent = {
       type: 'metadata',
@@ -203,14 +83,8 @@ ${styleHint}，续写下一段（150-300字），与前文情节连续。`;
     // 检测推理模型：GLM-5.x、DeepSeek-R1 等会返回 reasoning_content
     // 注意：GLM-4.7 等模型在复杂任务时也可能返回 reasoning_content
     const modelName = (process.env.AI_MODEL || '').toLowerCase();
-    const isReasoningModel =
-      modelName.includes('5.') ||
-      modelName.includes('deepseek-r') ||
-      modelName.includes('reasoning') ||
-      modelName.includes('glm-4.7');  // GLM-4.7 也会返回推理过程
-    // 推理模型的思考 tokens 和正文 tokens 共享 max_tokens 配额，
-    // 需要额外余量（思考通常占 1500-3000 tokens）
-    const maxTokens = isReasoningModel ? Math.max(baseMaxTokens + 4000, 6000) : baseMaxTokens;
+    const isReasoningModel = isReasoningModelName(modelName);
+    const maxTokens = getContinuationMaxTokens(baseMaxTokens, modelName);
     console.log('[stream-continue] maxTokens:', maxTokens, '(base:', baseMaxTokens, 'reasoning:', isReasoningModel, 'model:', modelName, ')');
     const { url, headers, body } = buildOpenAIRequest(prompt, undefined, maxTokens, story as any);
     const bodyObj = JSON.parse(body);

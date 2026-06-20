@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { getUserIdFromRequest } from '@/lib/auth-helpers';
-import { canViewStory } from '@/lib/permissions';
 import { getOrderedChain } from '@/lib/chain-helpers';
 import { buildFullPrompt } from '@/lib/prompt-builder';
 import { directorManager } from '@/lib/director-manager';
@@ -14,6 +12,8 @@ import { PacingEngine } from '@/lib/pacing-engine';
 import { characterManager } from '@/lib/character-engine';
 import { EventTracker } from '@/lib/event-tracker';
 import { triggerBackup } from '@/lib/auto-backup';
+import { loadContinuationContext } from '@/lib/continuation/context';
+import { collectConsistencyWarnings } from '@/lib/continuation/consistency';
 import type { StorySegment } from '@/lib/prisma';
 
 export async function POST(
@@ -21,41 +21,13 @@ export async function POST(
   { params }: { params: { id: string } },
 ) {
   try {
-    const userId = await getUserIdFromRequest(request);
-    if (!userId) {
-      return NextResponse.json({ error: '请先登录' }, { status: 401 });
-    }
-
     const { id: storyId } = params;
     const { branchId = 'main', pacingConfig, directorOverrides } = await request.json();
+    const contextResult = await loadContinuationContext(request, storyId, branchId);
+    if (!contextResult.ok) return contextResult.response;
 
-    if (!storyId) {
-      return NextResponse.json({ error: '缺少参数' }, { status: 400 });
-    }
-
-    const story = await prisma.story.findUnique({ where: { id: storyId } });
-    if (!story) return NextResponse.json({ error: '故事不存在' }, { status: 404 });
-
-    if (!canViewStory(story, userId)) {
-      return NextResponse.json({ error: '无权查看' }, { status: 403 });
-    }
-
-    const chain = await getOrderedChain(storyId, branchId);
-    if (chain.length === 0) {
-      return NextResponse.json({ error: '该分支没有段落' }, { status: 404 });
-    }
-    const tailSegment = chain[chain.length - 1];
-
-    // Consistency check
-    let consistencyWarnings: string[] = [];
-    try {
-      const preIssues = await consistencyChecker.checkChainConsistency(chain as any);
-      if (preIssues.length > 0) {
-        consistencyWarnings = preIssues.map((i: any) => `[${i.severity}] ${i.description}`);
-      }
-    } catch (e) {
-      console.warn('[continue] 矛盾检测失败:', e);
-    }
+    const { story, chain, tailSegment } = contextResult.context;
+    const consistencyWarnings = await collectConsistencyWarnings(chain, '[continue]');
 
     // Timeline check
     let timelineWarnings: string[] = [];
