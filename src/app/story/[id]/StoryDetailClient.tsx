@@ -12,14 +12,14 @@ import AutoContinuePanel from '@/components/AutoContinuePanel';
 import PlausibilityPanel from '@/components/PlausibilityPanel';
 import VNChapterPanel from '@/components/VNChapterPanel';
 import { IMAGE_STYLES, type ImageStyle, type ConcreteImageStyle } from '@/lib/image-styles';
-import type { PacingConfig, Character, StorySegment, StoryBranch } from '@/types/story';
-import { getStaticBranchDirections } from '@/lib/genre-config';
+import type { StorySegment } from '@/types/story';
 import LikeButton from '@/components/social/LikeButton';
 import CommentSection from '@/components/social/CommentSection';
 import VisibilityToggle from '@/components/social/VisibilityToggle';
 import ForkBadge from '@/components/social/ForkBadge';
 import { useStoryData } from './hooks/useStoryData';
 import { useStoryContinuation } from './hooks/useStoryContinuation';
+import { useBranching } from './hooks/useBranching';
 
 interface StoryDetailClientProps {
   storyId: string;
@@ -64,13 +64,33 @@ export default function StoryDetailClient({ storyId }: StoryDetailClientProps) {
     loadBranchSegments,
     loadTree,
   });
-  const [showBranchDialog, setShowBranchDialog] = useState(false);
-  const [branchingSegmentId, setBranchingSegmentId] = useState<string | null>(null);
-  const [userDirection, setUserDirection] = useState('');
-  const [customDirection, setCustomDirection] = useState('');
-  const [branching, setBranching] = useState(false);
-  const [branchStep, setBranchStep] = useState('');
-  const [branchPreview, setBranchPreview] = useState('');
+  const {
+    showBranchDialog,
+    setShowBranchDialog,
+    userDirection,
+    setUserDirection,
+    customDirection,
+    setCustomDirection,
+    branching,
+    branchStep,
+    branchPreview,
+    suggestedDirections,
+    suggestionsLoading,
+    handleBranch,
+    confirmBranch,
+    switchBranch,
+    handleDeleteBranch,
+    getCurrentBranchPath,
+    getBranchCountForSegment,
+  } = useBranching({
+    storyId: id,
+    currentBranchId,
+    branches,
+    storyGenre: story?.genre,
+    setCurrentBranchId,
+    loadTree,
+    loadBranchSegments,
+  });
 
   // C6 new state
   const [showCharacterPanel, setShowCharacterPanel] = useState(false);
@@ -84,8 +104,6 @@ export default function StoryDetailClient({ storyId }: StoryDetailClientProps) {
   const [editingContent, setEditingContent] = useState('');
   const [editingTitle, setEditingTitle] = useState('');
   const [savingSegment, setSavingSegment] = useState(false);
-  const [suggestedDirections, setSuggestedDirections] = useState<Array<{ icon: string; label: string; desc: string }>>([]);
-  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   // P6-2: 图片生成状态
   const [regeneratingImageForSeg, setRegeneratingImageForSeg] = useState<string | null>(null);
   const [imageStyle, setImageStyle] = useState<ImageStyle>('ink-wash');
@@ -157,131 +175,6 @@ export default function StoryDetailClient({ storyId }: StoryDetailClientProps) {
     } finally {
       setRegeneratingImageForSeg(null);
     }
-  };
-
-  // C6.7: Dynamic branch directions (混合方案：静态模板 + AI 生成)
-  const handleBranch = async (segmentId: string) => {
-    setBranchingSegmentId(segmentId);
-    setUserDirection('');
-    setCustomDirection('');
-
-    // Phase 1: 立即展示 genre 对应的静态方向
-    try {
-      const charRes = await fetch(`/api/stories/${id}/characters`);
-      let chars: Array<{ name: string; role: string }> = [];
-      if (charRes.ok) {
-        const raw = await charRes.json();
-        const arr: Character[] = Array.isArray(raw) ? raw : (raw.characters || []);
-        chars = arr.map(c => ({ name: c.name, role: c.role }));
-      }
-      setSuggestedDirections(getStaticBranchDirections(story?.genre, chars));
-    } catch {
-      setSuggestedDirections(getStaticBranchDirections('', []));
-    }
-    setShowBranchDialog(true);
-
-    // Phase 2: 后台异步获取 AI 生成的精准建议
-    setSuggestionsLoading(true);
-    try {
-      const res = await fetch(`/api/stories/${id}/branch-suggestions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ segmentId, branchId: currentBranchId }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.suggestions?.length > 0) {
-          setSuggestedDirections(data.suggestions);
-        }
-      }
-    } catch {
-      // 静默失败，静态方向保持展示
-    } finally {
-      setSuggestionsLoading(false);
-    }
-  };
-
-  const confirmBranch = async () => {
-    if (!branchingSegmentId) return;
-    const direction = customDirection.trim() || userDirection;
-    if (!direction) { alert('请选择或输入分叉方向'); return; }
-
-    setBranching(true);
-    setBranchStep('thinking');
-    setBranchPreview('');
-
-    try {
-      await new Promise(r => setTimeout(r, 800));
-      setBranchStep('generating');
-
-      const res = await fetch(`/api/stories/${id}/branch`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          segmentId: branchingSegmentId,
-          userDirection: direction,
-          visibility: (document.getElementById('fork-visibility') as HTMLSelectElement)?.value || 'PRIVATE',
-          model: (document.getElementById('fork-model') as HTMLSelectElement)?.value || undefined,
-        })
-      });
-      if (!res.ok) throw new Error('分叉失败');
-      
-      const data = await res.json();
-      setBranchStep('saving');
-      setBranchPreview(data.segment?.content || '分叉剧情已生成');
-      await new Promise(r => setTimeout(r, 500));
-
-      // 自动切换到新分支
-      if (data.branch?.id) {
-        setCurrentBranchId(data.branch.id);
-      }
-      await loadTree();
-      setShowBranchDialog(false);
-      setBranchingSegmentId(null);
-    } catch (e) {
-      alert('分叉失败: ' + (e instanceof Error ? e.message : '请重试'));
-    } finally {
-      setBranching(false);
-      setBranchStep('');
-      setBranchPreview('');
-    }
-  };
-
-  const switchBranch = async (branchId: string) => {
-    setCurrentBranchId(branchId);
-  };
-
-  const handleDeleteBranch = async (branchId: string, branchLabel: string) => {
-    if (branchId === 'main') return;
-    const ok = confirm(`确定要删除分支「${branchLabel}」吗？\n该分支下的所有段落（包括从此分支再分叉的子分支）都将被永久删除，无法恢复。`);
-    if (!ok) return;
-
-    try {
-      const res = await fetch(`/api/stories/${id}/branch/${branchId}`, { method: 'DELETE' });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || '删除失败');
-      }
-
-      // 若当前正在查看被删除的分支，先切回主线
-      if (currentBranchId === branchId) {
-        setCurrentBranchId('main');
-      }
-      await loadTree();
-      await loadBranchSegments(currentBranchId === branchId ? 'main' : currentBranchId);
-    } catch (e) {
-      alert('删除分支失败: ' + (e instanceof Error ? e.message : '请重试'));
-    }
-  };
-
-  const getCurrentBranchPath = () => {
-    if (currentBranchId === 'main') return ['主线'];
-    const branch = branches.find(b => b.id === currentBranchId);
-    return branch ? [branch.userDirection || branch.title] : [currentBranchId];
-  };
-
-  const getBranchCountForSegment = (segmentId: string) => {
-    return branches.filter(b => b.sourceSegmentId === segmentId).length;
   };
 
   if (loading) {
