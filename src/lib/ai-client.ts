@@ -4,8 +4,42 @@
  * 支持 429/5xx 指数退避重试、并发控制优先级队列、全局限流
  */
 
-import { type Story } from '@/lib/prisma';
 import { FICTION_KEYWORDS } from './genre-config';
+
+export interface AIStoryContext {
+  id?: string;
+  title?: string;
+  description?: string | null;
+  genre?: string | null;
+  era?: string | null;
+  visibility?: string | null;
+  characterIds?: string[] | null;
+  worldSettings?: Record<string, any>;
+}
+
+type AIStoryContextInput = Omit<AIStoryContext, 'worldSettings'> & {
+  worldSettings?: unknown;
+};
+
+function normalizeWorldSettings(value: unknown): Record<string, any> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, any>
+    : undefined;
+}
+
+export function toAIStoryContext(story: AIStoryContextInput | null | undefined): AIStoryContext {
+  if (!story) return {};
+  return {
+    id: story.id,
+    title: story.title,
+    description: story.description ?? null,
+    genre: story.genre ?? null,
+    era: story.era ?? null,
+    visibility: story.visibility ?? null,
+    characterIds: story.characterIds ?? null,
+    worldSettings: normalizeWorldSettings(story.worldSettings),
+  };
+}
 
 // ─── 1.1 RetryConfig ────────────────────────────────────────────────
 
@@ -307,7 +341,7 @@ export interface GenerationParams {
 /**
  * 根据故事类型生成参数配置
  */
-export function getGenerationParams(story: Story): GenerationParams {
+export function getGenerationParams(story: AIStoryContext = {}): GenerationParams {
   const genre = story.genre || '';
   const isFiction = FICTION_KEYWORDS.some(k => genre.includes(k));
   const isHistory = genre.includes('正史') || genre.includes('历史') || !isFiction;
@@ -342,11 +376,11 @@ export function buildOpenAIRequest(
   prompt: string,
   systemPrompt?: string,
   maxTokens?: number,
-  story?: Story,
+  story?: AIStoryContext,
   enableWebSearch?: boolean,
 ) {
   const config = getDefaultModelConfig();
-  const params = story ? getGenerationParams(story) : getGenerationParams({} as Story);
+  const params = getGenerationParams(story ?? {});
 
   const messages = [
     { role: 'system', content: systemPrompt || '你是一位专业的文学作家。请用中文回答，保持与前文的风格和情节连续性。' },
@@ -405,7 +439,7 @@ export function buildOpenAIRequest(
 export async function callAI(prompt: string, options: {
   systemPrompt?: string;
   maxTokens?: number;
-  story?: Story;
+  story?: AIStoryContext;
   stream?: boolean;
   priority?: RequestPriority;
   webSearch?: boolean;
@@ -434,7 +468,7 @@ export async function callAI(prompt: string, options: {
 export async function callAIText(prompt: string, options: {
   systemPrompt?: string;
   maxTokens?: number;
-  story?: Story;
+  story?: AIStoryContext;
   priority?: RequestPriority;
   webSearch?: boolean;
 } = {}): Promise<string> {

@@ -6,13 +6,14 @@ import { getOrderedChain } from '@/lib/chain-helpers';
 import { buildFullPrompt, correctCharacterNames } from '@/lib/prompt-builder';
 import { PacingEngine } from '@/lib/pacing-engine';
 import { consistencyChecker } from '@/lib/consistency-checker';
-import { callAIText, buildOpenAIRequest, aiRequestQueue } from '@/lib/ai-client';
+import { callAIText, buildOpenAIRequest, aiRequestQueue, toAIStoryContext } from '@/lib/ai-client';
 import { contextSummarizer } from '@/lib/context-summarizer';
 import { characterManager } from '@/lib/character-engine';
 import { directorManager } from '@/lib/director-manager';
 import { EventTracker } from '@/lib/event-tracker';
 import { triggerBackup } from '@/lib/auto-backup';
 import { extractFinalAnswer, getContinuationMaxTokens, isReasoningModelName } from '@/lib/continuation/generation';
+import { toSegmentForAI, toSegmentsForAI } from '@/lib/continuation/adapters';
 import type { PacingConfig, DirectorState } from '@/types/story';
 
 interface AutoContinueOptions {
@@ -74,6 +75,8 @@ export async function POST(
       return NextResponse.json({ error: '无权查看' }, { status: 403 });
     }
 
+    const storyForAI = toAIStoryContext(story);
+
     const modelName = (process.env.AI_MODEL || '').toLowerCase();
     const isReasoningModel = isReasoningModelName(modelName);
 
@@ -123,10 +126,12 @@ export async function POST(
               break;
             }
             const tailSegment = chain[chain.length - 1];
+            const promptChain = toSegmentsForAI(chain);
+            const promptTailSegment = toSegmentForAI(tailSegment);
 
             // 一致性检查（可选暂停）
             try {
-              const issues = await consistencyChecker.checkChainConsistency(chain as any);
+              const issues = await consistencyChecker.checkChainConsistency(chain);
               if (issues.length > 0) {
                 const warnings = issues.map((issue: any) => `[${issue.severity}] ${issue.description}`);
                 sendEvent({ type: 'warning', segmentIndex: i, message: warnings.join('; ') });
@@ -144,8 +149,8 @@ export async function POST(
             const fullResult = await buildFullPrompt({
               storyId,
               branchId,
-              tailSegment: tailSegment as any,
-              chain: chain as any,
+              tailSegment: promptTailSegment,
+              chain: promptChain,
               storyTitle: story.title,
               storyDescription: story.description ?? undefined,
               pacingConfig,
@@ -166,14 +171,12 @@ export async function POST(
 
             while (!aiResponse && retryCount < maxRetries) {
               try {
-                const response = await fetch(
-                  buildOpenAIRequest(prompt, undefined, maxTokens, story as any).url,
-                  {
-                    method: 'POST',
-                    headers: buildOpenAIRequest(prompt, undefined, maxTokens, story as any).headers,
-                    body: buildOpenAIRequest(prompt, undefined, maxTokens, story as any).body,
-                  }
-                );
+                const request = buildOpenAIRequest(prompt, undefined, maxTokens, storyForAI);
+                const response = await fetch(request.url, {
+                  method: 'POST',
+                  headers: request.headers,
+                  body: request.body,
+                });
 
                 if (!response.ok) {
                   if (response.status === 429) {
@@ -270,11 +273,11 @@ export async function POST(
                   const mentioned = await characterManager.discoverAndRegisterCharacters(
                     storyId,
                     finalContent,
-                    (p: string) => callAIText(p, { maxTokens: 1200, story: story as any }),
+                    (p: string) => callAIText(p, { maxTokens: 1200, story: storyForAI }),
                     {
                       genre: story.genre ?? undefined,
                       storyDescription: story.description ?? undefined,
-                      callAIWithWebSearchFn: (p: string) => callAIText(p, { maxTokens: 1500, story: story as any, webSearch: true }),
+                      callAIWithWebSearchFn: (p: string) => callAIText(p, { maxTokens: 1500, story: storyForAI, webSearch: true }),
                     },
                   );
                   mentionedIds = mentioned.map(c => c.id);
@@ -289,8 +292,8 @@ export async function POST(
                 }
 
                 contextSummarizer.generateSegmentSummary(
-                  newSegment as any,
-                  [...chain, newSegment] as any,
+                  newSegment,
+                  [...chain, newSegment],
                   story?.genre ?? undefined
                 ).catch(() => {});
 
@@ -299,14 +302,14 @@ export async function POST(
                     storyId,
                     newSegment.id,
                     finalContent,
-                    (p: string) => callAIText(p, { maxTokens: 1200, story: story as any })
+                    (p: string) => callAIText(p, { maxTokens: 1200, story: storyForAI })
                   ).catch(() => {});
                 }
 
                 directorManager.updateSceneState(
                   storyId,
                   finalContent,
-                  (p: string) => callAIText(p, { maxTokens: 1200, story: story as any })
+                  (p: string) => callAIText(p, { maxTokens: 1200, story: storyForAI })
                 ).catch(() => {});
 
                 new EventTracker().processSegment(storyId, branchId, {

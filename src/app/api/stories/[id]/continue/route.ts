@@ -6,7 +6,7 @@ import { directorManager } from '@/lib/director-manager';
 import { timelineEngine } from '@/lib/timeline-engine';
 import { consistencyChecker } from '@/lib/consistency-checker';
 import { plausibilityChecker } from '@/lib/plausibility-checker';
-import { callAIText } from '@/lib/ai-client';
+import { callAIText, toAIStoryContext } from '@/lib/ai-client';
 import { classifyGenre } from '@/lib/genre-config';
 import { PacingEngine } from '@/lib/pacing-engine';
 import { characterManager } from '@/lib/character-engine';
@@ -14,6 +14,7 @@ import { EventTracker } from '@/lib/event-tracker';
 import { triggerBackup } from '@/lib/auto-backup';
 import { loadContinuationContext } from '@/lib/continuation/context';
 import { collectConsistencyWarnings } from '@/lib/continuation/consistency';
+import { toSegmentForAI, toSegmentsForAI } from '@/lib/continuation/adapters';
 import type { StorySegment } from '@/lib/prisma';
 
 export async function POST(
@@ -27,7 +28,10 @@ export async function POST(
     if (!contextResult.ok) return contextResult.response;
 
     const { story, chain, tailSegment } = contextResult.context;
-    const consistencyWarnings = await collectConsistencyWarnings(chain, '[continue]');
+    const storyForAI = toAIStoryContext(story);
+    const promptChain = toSegmentsForAI(chain);
+    const promptTailSegment = toSegmentForAI(tailSegment);
+    const consistencyWarnings = await collectConsistencyWarnings(promptChain, '[continue]');
 
     // Timeline check
     let timelineWarnings: string[] = [];
@@ -46,8 +50,8 @@ export async function POST(
       prompt = (await buildFullPrompt({
         storyId,
         branchId,
-        tailSegment: tailSegment as any,
-        chain: chain as any,
+        tailSegment: promptTailSegment,
+        chain: promptChain,
         storyTitle: story.title,
         storyDescription: story.description ?? undefined,
         pacingConfig,
@@ -86,7 +90,7 @@ export async function POST(
     const aiResponse = await callAIText(prompt, {
       systemPrompt,
       maxTokens,
-      story: story as any,
+      story: storyForAI,
     });
 
     if (!aiResponse || aiResponse.trim().length === 0) {
@@ -102,11 +106,11 @@ export async function POST(
       const mentioned = await characterManager.discoverAndRegisterCharacters(
         storyId,
         aiResponse,
-        (p: string) => callAIText(p, { maxTokens: 1200, story: story as any }),
+        (p: string) => callAIText(p, { maxTokens: 1200, story: storyForAI }),
         {
           genre: story.genre ?? undefined,
           storyDescription: story.description ?? undefined,
-          callAIWithWebSearchFn: (p: string) => callAIText(p, { maxTokens: 1500, story: story as any, webSearch: true }),
+          callAIWithWebSearchFn: (p: string) => callAIText(p, { maxTokens: 1500, story: storyForAI, webSearch: true }),
         },
       );
       mentionedIds = mentioned.map(c => c.id);
@@ -143,7 +147,7 @@ export async function POST(
     if (mentionedIds.length > 0) {
       characterManager
         .inferAndUpdateStatesForSegment(storyId, newSegment.id, aiResponse, (p: string) =>
-          callAIText(p, { maxTokens: 1200, story: story as any })
+          callAIText(p, { maxTokens: 1200, story: storyForAI })
         )
         .catch((e: any) => console.warn('[continue] 角色状态更新失败:', e));
     }
@@ -151,7 +155,7 @@ export async function POST(
     // 场景状态更新必须 await，确保后续 images/generate 能读到最新值
     try {
       await directorManager.updateSceneState(storyId, aiResponse, (p: string) =>
-        callAIText(p, { maxTokens: 1200, story: story as any })
+        callAIText(p, { maxTokens: 1200, story: storyForAI })
       );
     } catch (e) {
       console.warn('[continue] 场景状态更新失败:', e);
@@ -168,7 +172,7 @@ export async function POST(
 
     // Post-write consistency check
     try {
-      const postIssues = await consistencyChecker.runConsistencyCheck(newSegment as any, [...chain, newSegment] as any);
+      const postIssues = await consistencyChecker.runConsistencyCheck(newSegment, [...chain, newSegment]);
       if (postIssues.length > 0) {
         consistencyWarnings.push(...postIssues.map((i: any) => `[${i.severity}] ${i.description}`));
       }
@@ -191,8 +195,8 @@ export async function POST(
         existingContent,
         newContent: aiResponse,
         characterNames,
-        worldSettings: (story as any).worldSettings,
-      }, (p: string) => callAIText(p, { maxTokens: 1500, story: story as any }));
+        worldSettings: (storyForAI).worldSettings,
+      }, (p: string) => callAIText(p, { maxTokens: 1500, story: storyForAI }));
 
       console.log(`[continue] 合理性检测: 分数 ${plausibilityReport.overallScore}, 问题数 ${plausibilityReport.issues.length}`);
     } catch (e) {

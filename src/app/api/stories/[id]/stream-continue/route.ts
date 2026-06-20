@@ -4,7 +4,7 @@ import { getOrderedChain } from '@/lib/chain-helpers';
 import { buildFullPrompt, correctCharacterNames } from '@/lib/prompt-builder';
 import { PacingEngine } from '@/lib/pacing-engine';
 import { consistencyChecker } from '@/lib/consistency-checker';
-import { callAIText, buildOpenAIRequest } from '@/lib/ai-client';
+import { callAIText, buildOpenAIRequest, toAIStoryContext } from '@/lib/ai-client';
 import { contextSummarizer } from '@/lib/context-summarizer';
 import { characterManager } from '@/lib/character-engine';
 import { directorManager } from '@/lib/director-manager';
@@ -13,6 +13,7 @@ import { triggerBackup } from '@/lib/auto-backup';
 import { loadContinuationContext } from '@/lib/continuation/context';
 import { collectConsistencyWarnings } from '@/lib/continuation/consistency';
 import { extractFinalAnswer, getContinuationMaxTokens, isReasoningModelName } from '@/lib/continuation/generation';
+import { toSegmentForAI, toSegmentsForAI } from '@/lib/continuation/adapters';
 
 export async function POST(
   request: NextRequest,
@@ -25,6 +26,9 @@ export async function POST(
     if (!contextResult.ok) return contextResult.response;
 
     const { story, chain, tailSegment } = contextResult.context;
+    const storyForAI = toAIStoryContext(story);
+    const promptChain = toSegmentsForAI(chain);
+    const promptTailSegment = toSegmentForAI(tailSegment);
 
     let prompt: string;
     let registeredCharacterNames: string[] = [];
@@ -33,8 +37,8 @@ export async function POST(
       const fullResult = await buildFullPrompt({
         storyId,
         branchId,
-        tailSegment: tailSegment as any,
-        chain: chain as any,
+        tailSegment: promptTailSegment,
+        chain: promptChain,
         storyTitle: story.title,
         storyDescription: story.description ?? undefined,
         pacingConfig,
@@ -47,7 +51,7 @@ export async function POST(
         `${s.title ? `【${s.title}】` : ''}${s.content}`
       ).join('\n');
 
-      const genre = (story as any)?.genre || '';
+      const genre = (storyForAI)?.genre || '';
       const fictionKeywords = ['同人', '玄幻', '仙侠', '科幻', '都市', '现代', '悬疑', '架空', '穿越', '重生', '武侠', '奇幻', '轻小说', '网文'];
       const isFiction = fictionKeywords.some(k => genre.includes(k));
 
@@ -66,7 +70,7 @@ ${styleHint}，续写下一段（150-300字），与前文情节连续。`;
 
     const pacingEngine = pacingConfig ? new PacingEngine(pacingConfig) : null;
 
-    const consistencyWarnings = await collectConsistencyWarnings(chain, '[stream-continue]');
+    const consistencyWarnings = await collectConsistencyWarnings(promptChain, '[stream-continue]');
 
     const metadataEvent = {
       type: 'metadata',
@@ -86,7 +90,7 @@ ${styleHint}，续写下一段（150-300字），与前文情节连续。`;
     const isReasoningModel = isReasoningModelName(modelName);
     const maxTokens = getContinuationMaxTokens(baseMaxTokens, modelName);
     console.log('[stream-continue] maxTokens:', maxTokens, '(base:', baseMaxTokens, 'reasoning:', isReasoningModel, 'model:', modelName, ')');
-    const { url, headers, body } = buildOpenAIRequest(prompt, undefined, maxTokens, story as any);
+    const { url, headers, body } = buildOpenAIRequest(prompt, undefined, maxTokens, storyForAI);
     const bodyObj = JSON.parse(body);
     bodyObj.stream = true;
     const streamBody = JSON.stringify(bodyObj);
@@ -244,11 +248,11 @@ ${styleHint}，续写下一段（150-300字），与前文情节连续。`;
                 const mentioned = await characterManager.discoverAndRegisterCharacters(
                   storyId,
                   fullContent,
-                  (p: string) => callAIText(p, { maxTokens: 1200, story: story as any }),
+                  (p: string) => callAIText(p, { maxTokens: 1200, story: storyForAI }),
                   {
                     genre: story.genre ?? undefined,
                     storyDescription: story.description ?? undefined,
-                    callAIWithWebSearchFn: (p: string) => callAIText(p, { maxTokens: 1500, story: story as any, webSearch: true }),
+                    callAIWithWebSearchFn: (p: string) => callAIText(p, { maxTokens: 1500, story: storyForAI, webSearch: true }),
                   },
                 );
                 mentionedIds = mentioned.map(c => c.id);
@@ -264,14 +268,14 @@ ${styleHint}，续写下一段（150-300字），与前文情节连续。`;
               }
 
               // 摘要预生成
-              contextSummarizer.generateSegmentSummary(newSegment as any, [...chain, newSegment] as any, story?.genre ?? undefined)
+              contextSummarizer.generateSegmentSummary(newSegment, [...chain, newSegment], story?.genre ?? undefined)
                 .catch((e: any) => console.warn('[stream-continue] 摘要预生成失败:', e));
 
               // 角色状态更新
               if (mentionedIds.length > 0) {
                 characterManager
                   .inferAndUpdateStatesForSegment(storyId, newSegment.id, fullContent, (p: string) =>
-                    callAIText(p, { maxTokens: 1200, story: story as any })
+                    callAIText(p, { maxTokens: 1200, story: storyForAI })
                   )
                   .catch((e: any) => console.warn('[stream-continue] 角色状态更新失败:', e));
               }
@@ -279,7 +283,7 @@ ${styleHint}，续写下一段（150-300字），与前文情节连续。`;
               // 场景状态更新
               try {
                 await directorManager.updateSceneState(storyId, fullContent, (p: string) =>
-                  callAIText(p, { maxTokens: 1200, story: story as any })
+                  callAIText(p, { maxTokens: 1200, story: storyForAI })
                 );
               } catch (e) {
                 console.warn('[stream-continue] 场景状态更新失败:', e);
@@ -296,7 +300,7 @@ ${styleHint}，续写下一段（150-300字），与前文情节连续。`;
 
               // 一致性检查
               try {
-                const postIssues = await consistencyChecker.runConsistencyCheck(newSegment as any, [...chain, newSegment] as any);
+                const postIssues = await consistencyChecker.runConsistencyCheck(newSegment, [...chain, newSegment]);
                 if (postIssues.length > 0) {
                   console.warn('[stream-continue] 后处理一致性警告:', postIssues.map((i: any) => i.description));
                 }
