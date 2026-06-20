@@ -18,14 +18,15 @@ Implemented:
 - Phase 18 audit/dry-run/persist-existing/rollback-report tooling.
 - Phase 19 corpus quality reporting.
 
-Not completed as a release lock:
+Release lock additions:
 
-- No server push was performed.
-- No final tag was created.
-- No final database backup was taken during this hardening pass.
+- Final database backup was taken and gzip-verified: `/home/workspace/fengbohan/Another-chance/backups/gushi_20260620_164709.sql.gz`.
+- Final TypeScript gate passes after aligning the prompt smoke script with `PacingConfig`.
+- Final Phase 20 quality report was written under ignored `exports/`.
+- Server branch and final tag target are prepared for push after this document commit: `aivn-fusion-phase20-final-20260620-165304`.
 - No real image-provider batch generation was run.
 - No bulk visual backfill rows were persisted.
-- No generated package, report, image, dump, or secret was committed.
+- No generated package, image, dump, or secret was committed.
 
 ## Commits
 
@@ -36,6 +37,8 @@ Server commits:
 d8b1d0c test(vn): smoke visual AIVN package orchestration
 4e52fdd feat(vn): fuse AIVN image quality constraints
 82af5ca feat(vn): add fusion quality reporting
+65dc942 docs(vn): record AIVN fusion hardening boundary
+4041ce1 chore-vn: align prompt smoke pacing config
 ```
 
 Local AIVN commit:
@@ -106,13 +109,7 @@ TypeScript:
 npx tsc --noEmit --pretty false
 ```
 
-Result:
-
-```text
-scripts/test-prompt-generation.ts(97,9): error TS2353: Object literal may only specify known properties, and 'pauseAfterParagraph' does not exist in type 'PacingConfig'.
-```
-
-This is the known pre-existing non-VN baseline issue.
+Result: passed with no diagnostics after removing the obsolete `pauseAfterParagraph` sample field from `scripts/test-prompt-generation.ts`.
 
 Local AIVN smoke:
 
@@ -137,6 +134,8 @@ exports/aivn-migration/reports/phase18-visual-audit-20260619-final.json
 exports/aivn-migration/reports/phase18-visual-dry-run-20260619-final.json
 exports/aivn-migration/reports/phase19-quality-summary-20260619-final.json
 exports/aivn-migration/reports/phase19-quality-summary-20260619-final.md
+exports/aivn-migration/reports/phase20-final-fusion-summary-20260620-165304.json
+exports/aivn-migration/reports/phase20-final-fusion-summary-20260620-165304.md
 ```
 
 Phase 18 final audit/dry-run:
