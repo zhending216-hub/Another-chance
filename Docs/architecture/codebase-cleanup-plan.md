@@ -321,6 +321,41 @@ refactor(types): add typed AI story adapters
 
 每个 commit 都应该是可独立回滚的。
 
+## 执行完成记录
+
+截至 2026-06-20，本整理计划的 Batch 1-6 已按小步提交完成：
+
+```text
+32235c4 chore(tests): separate manual smoke scripts from vitest suites
+aba234f refactor(story): split story detail page shell
+aeda5a8 refactor(story): extract story data hook
+87435f1 refactor(story): extract story continuation hook
+c4e01f2 refactor(story): extract story branching hook
+f76de7d refactor(api): share continuation context service
+d9698de refactor(vn): split visual action node builders
+0166ea4 refactor(vn): split validator helpers
+10f3936 chore(logging): gate noisy generation debug logs
+7afb924 refactor(types): add typed AI story adapters
+```
+
+完成边界：
+
+- 未执行数据库 schema 变更。
+- 未运行 Prisma migration。
+- 未批量写库。
+- 未改写 `Story` / `StorySegment` / `StoryBranch` 原始数据。
+- 未替换 prose continuation 路由。
+- 未执行真实图片批量生成或 visual backfill。
+
+验证 gate：
+
+```text
+npm run typecheck
+npm run test:vn
+npm run test:aivn-package
+npx vitest run
+```
+
 ## 审核者检查清单
 
 审核时重点看：
