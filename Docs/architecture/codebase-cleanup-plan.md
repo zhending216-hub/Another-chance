@@ -58,11 +58,11 @@ process.exit: 21
 需要规范的历史测试文件：
 
 ```text
-tests/branch-memory.test.ts
-tests/consistency-checker.test.ts
-tests/context-summarizer.test.ts
-tests/e2e.test.ts
-tests/event-tracker.test.ts
+scripts/manual-smoke/branch-memory-smoke.ts
+scripts/manual-smoke/consistency-checker-smoke.ts
+scripts/manual-smoke/context-summarizer-smoke.ts
+scripts/manual-smoke/context-memory-e2e-smoke.ts
+scripts/manual-smoke/event-tracker-smoke.ts
 ```
 
 这些文件更像手动 smoke script，不适合作为默认 `vitest run` 的长期结构。
@@ -121,11 +121,11 @@ gzip -t backups/<backup>.sql.gz
 优先处理文件：
 
 ```text
-tests/branch-memory.test.ts
-tests/consistency-checker.test.ts
-tests/context-summarizer.test.ts
-tests/e2e.test.ts
-tests/event-tracker.test.ts
+scripts/manual-smoke/branch-memory-smoke.ts
+scripts/manual-smoke/consistency-checker-smoke.ts
+scripts/manual-smoke/context-summarizer-smoke.ts
+scripts/manual-smoke/context-memory-e2e-smoke.ts
+scripts/manual-smoke/event-tracker-smoke.ts
 ```
 
 验证：

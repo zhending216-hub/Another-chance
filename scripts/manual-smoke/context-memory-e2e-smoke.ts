@@ -1,14 +1,14 @@
 /**
  * 6.6: 端到端测试 — 长故事创建、摘要、事件追踪、分支记忆、矛盾检测
  *
- * 运行: npx tsx tests/e2e.test.ts
+ * 运行: npx tsx scripts/manual-smoke/context-memory-e2e-smoke.ts
  */
 
-import { estimateTokens, extractSummaryFromSegment } from '../src/lib/context-summarizer';
-import { extractKeyEvents, buildEventPrompt } from '../src/lib/event-tracker';
-import { ConsistencyChecker, type CharacterStateForCheck } from '../src/lib/consistency-checker';
-import { branchMemory } from '../src/lib/branch-memory';
-import type { Visibility } from '../src/lib/prisma';
+import { estimateTokens, extractSummaryFromSegment } from '../../src/lib/context-summarizer';
+import { extractKeyEvents, buildEventPrompt } from '../../src/lib/event-tracker';
+import { ConsistencyChecker, type CharacterStateForCheck } from '../../src/lib/consistency-checker';
+import { branchMemory } from '../../src/lib/branch-memory';
+import type { Visibility } from '../../src/lib/prisma';
 
 // Minimal segment shape matching Prisma's StorySegment
 type TestSegment = {

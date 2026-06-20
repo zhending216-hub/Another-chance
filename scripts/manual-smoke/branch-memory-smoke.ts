@@ -1,7 +1,7 @@
 /**
  * 6.4: 测试 branch-memory.ts — 分支记忆管理
  *
- * 运行: npx tsx tests/branch-memory.test.ts
+ * 运行: npx tsx scripts/manual-smoke/branch-memory-smoke.ts
  */
 
 import {
@@ -10,7 +10,7 @@ import {
   syncSharedCharacterStates,
   buildBranchMemoryPrompt,
   branchMemory,
-} from '../src/lib/branch-memory';
+} from '../../src/lib/branch-memory';
 
 let passed = 0;
 let failed = 0;

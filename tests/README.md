@@ -1,5 +1,7 @@
 # Tests Map
 
+The `tests/` directory is reserved for automated Vitest suites.
+
 The reliable automated release gate for the AIVN/Gushi fusion is:
 
 ```text
@@ -21,18 +23,16 @@ npm run test:aivn-package
 - `vn-tree-migration.test.ts`, `vn-bulk-migration.test.ts`, `vn-migration-run.test.ts`, `vn-phase9-skipped-migration.test.ts` - migration gates.
 - `vn-fusion-quality-report.test.ts` - corpus-level quality report logic.
 
-## Legacy Manual Smoke Files
+## Manual Smoke Scripts
 
-These files currently live under `tests/` but are not clean Vitest suites:
+The historical non-Vitest smoke files were moved to:
 
-- `branch-memory.test.ts`
-- `consistency-checker.test.ts`
-- `context-summarizer.test.ts`
-- `e2e.test.ts`
-- `event-tracker.test.ts`
+```text
+scripts/manual-smoke/
+```
 
-They should either be converted into standard `describe`/`test` suites or moved to a manual smoke-script folder in a separate cleanup pass. Do not include them in the Phase 20 AIVN release gate until converted.
+They should stay there unless converted into standard `describe`/`test` suites.
 
-## Full Test Caveat
+## Full Test Gate
 
-`npx vitest run` may still pick up historical manual smoke files. Use targeted package scripts for release decisions until those files are normalized.
+After Batch 1 cleanup, `npx vitest run` should only discover real Vitest test files.

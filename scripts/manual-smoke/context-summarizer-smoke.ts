@@ -1,11 +1,11 @@
 /**
  * 6.1: 测试 context-summarizer.ts — 摘要生成和分层上下文
  *
- * 运行: npx tsx tests/context-summarizer.test.ts
+ * 运行: npx tsx scripts/manual-smoke/context-summarizer-smoke.ts
  */
 
-import { estimateTokens, extractSummaryFromSegment } from '../src/lib/context-summarizer';
-import type { Visibility } from '../src/lib/prisma';
+import { estimateTokens, extractSummaryFromSegment } from '../../src/lib/context-summarizer';
+import type { Visibility } from '../../src/lib/prisma';
 
 // Minimal segment shape that matches the Prisma StorySegment fields used by extractSummaryFromSegment
 type TestSegment = {

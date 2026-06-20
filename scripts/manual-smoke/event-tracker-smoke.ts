@@ -1,11 +1,11 @@
 /**
  * 6.2: 测试 event-tracker.ts — 事件提取和追踪
  *
- * 运行: npx tsx tests/event-tracker.test.ts
+ * 运行: npx tsx scripts/manual-smoke/event-tracker-smoke.ts
  */
 
-import { extractKeyEvents, buildEventPrompt } from '../src/lib/event-tracker';
-import type { KeyEvent } from '../src/types/event-tracker';
+import { extractKeyEvents, buildEventPrompt } from '../../src/lib/event-tracker';
+import type { KeyEvent } from '../../src/types/event-tracker';
 
 let passed = 0;
 let failed = 0;

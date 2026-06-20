@@ -1,11 +1,11 @@
 /**
  * 6.3: 测试 consistency-checker.ts — 矛盾检测
  *
- * 运行: npx tsx tests/consistency-checker.test.ts
+ * 运行: npx tsx scripts/manual-smoke/consistency-checker-smoke.ts
  */
 
-import { ConsistencyChecker } from '../src/lib/consistency-checker';
-import type { CharacterStateForCheck, WorldVariable, LorebookEntry } from '../src/lib/consistency-checker';
+import { ConsistencyChecker } from '../../src/lib/consistency-checker';
+import type { CharacterStateForCheck, WorldVariable, LorebookEntry } from '../../src/lib/consistency-checker';
 
 let passed = 0;
 let failed = 0;

@@ -47,6 +47,8 @@ These scripts may write application data. Treat them as migration tools, not rou
 
 ## Manual Diagnostics And Smoke Scripts
 
+Standalone diagnostics:
+
 - `diagnose-genre.ts`
 - `test-auth.ts`
 - `test-continue.ts`
@@ -55,6 +57,12 @@ These scripts may write application data. Treat them as migration tools, not rou
 - `test-plausibility.ts`
 - `test-prompt-generation.ts`
 - `stress-test-story.ts`
+
+Historical smoke scripts moved out of `tests/`:
+
+```text
+scripts/manual-smoke/
+```
 
 These are manual tools and may call external services or depend on local data. They are not part of `npm run test:vn`.
 
